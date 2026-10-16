@@ -14,6 +14,7 @@ import (
 type StorageGateway struct{ client *pveapi.Client }
 
 var _ application.StorageGateway = (*StorageGateway)(nil)
+var _ application.ReadGateway = (*StorageGateway)(nil)
 
 func NewStorageGateway(client *pveapi.Client) (*StorageGateway, error) {
 	if client == nil {
@@ -39,7 +40,18 @@ func (g *StorageGateway) InspectPool(ctx context.Context, placement domain.Place
 }
 
 func (g *StorageGateway) Lookup(ctx context.Context, req domain.Request) (domain.Allocation, bool, error) {
-	entries, err := g.client.ListImages(ctx, req.Node, req.Storage, req.OwnerVMID)
+	return g.lookup(ctx, req.Placement(), req.OwnerVMID, req.AllocationReference())
+}
+
+func (g *StorageGateway) LookupVolume(ctx context.Context, id domain.Identity) (domain.Allocation, bool, error) {
+	if err := id.Validate(); err != nil {
+		return domain.Allocation{}, false, err
+	}
+	return g.lookup(ctx, id.Placement(), id.OwnerVMID(), id.Reference())
+}
+
+func (g *StorageGateway) lookup(ctx context.Context, placement domain.Placement, owner int, reference string) (domain.Allocation, bool, error) {
+	entries, err := g.client.ListImages(ctx, placement.Node, placement.Storage, owner)
 	if err != nil {
 		return domain.Allocation{}, false, mapError(err)
 	}
@@ -49,7 +61,7 @@ func (g *StorageGateway) Lookup(ctx context.Context, req domain.Request) (domain
 		if strings.TrimSpace(entry.VolumeID) == "" {
 			return domain.Allocation{}, false, errors.New("PVE storage content contains an entry without a volume ID")
 		}
-		if entry.VolumeID != req.AllocationReference() {
+		if entry.VolumeID != reference {
 			continue
 		}
 		if matched != nil {
@@ -64,7 +76,7 @@ func (g *StorageGateway) Lookup(ctx context.Context, req domain.Request) (domain
 		return domain.Allocation{}, false, domain.ErrConflict
 	}
 	return domain.Allocation{
-		Reference: matched.VolumeID, Placement: req.Placement(),
+		Reference: matched.VolumeID, Placement: placement,
 		OwnerVMID: matched.VMID, CapacityBytes: matched.Size,
 	}, true, nil
 }

@@ -9,6 +9,24 @@ import (
 	"pve-csi.local/csi-plugin/internal/volume/domain"
 )
 
+// Read errors differ from CreateVolume conflicts: an inconsistent observation
+// cannot be used, but does not mean the caller requested a duplicate volume.
+func csiReadError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return csiBackendError(err)
+	}
+	switch {
+	case errors.Is(err, domain.ErrInvalidHandle):
+		return status.Error(codes.InvalidArgument, "invalid v1 volume ID")
+	case errors.Is(err, application.ErrNotFound):
+		return status.Error(codes.NotFound, "volume was not found in the configured scope")
+	case errors.Is(err, domain.ErrConflict):
+		return status.Error(codes.FailedPrecondition, "volume metadata does not match the expected identity or capacity")
+	default:
+		return csiBackendError(err)
+	}
+}
+
 func csiBackendError(err error) error {
 	switch {
 	case errors.Is(err, context.Canceled):

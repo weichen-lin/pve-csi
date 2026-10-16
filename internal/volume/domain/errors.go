@@ -3,6 +3,7 @@ package domain
 import "errors"
 
 var (
+	ErrInvalidHandle      = errors.New("invalid v1 volume ID")
 	ErrConflict           = errors.New("existing volume conflicts with requested owner, format, content or capacity")
 	ErrInvalidCapacity    = errors.New("capacity range must contain positive bounds in ascending order")
 	ErrCapacityOutOfRange = errors.New("capacity range cannot fit a whole-GiB volume of at least 1 GiB")

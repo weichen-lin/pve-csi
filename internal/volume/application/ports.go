@@ -20,3 +20,13 @@ type StorageGateway interface {
 type Provisioner interface {
 	EnsureVolume(context.Context, domain.Request) (domain.Volume, error)
 }
+
+// ReadGateway deliberately exposes no allocation or deletion operation.
+type ReadGateway interface {
+	InspectPool(context.Context, domain.Placement) (PoolState, error)
+	LookupVolume(context.Context, domain.Identity) (domain.Allocation, bool, error)
+}
+
+type VolumeReader interface {
+	GetVolume(context.Context, domain.Identity) (domain.Volume, error)
+}

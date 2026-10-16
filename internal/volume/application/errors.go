@@ -3,6 +3,7 @@ package application
 import "errors"
 
 var (
+	ErrNotFound    = errors.New("volume not found in the configured scope")
 	ErrCapacity    = errors.New("requested volume exceeds storage available capacity")
 	ErrStorage     = errors.New("unsupported volume storage")
 	ErrUnconfirmed = errors.New("volume allocation outcome unconfirmed")

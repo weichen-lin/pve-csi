@@ -21,13 +21,17 @@ type Controller struct {
 	csi.UnimplementedControllerServer
 	cfg       Config
 	allocator application.Provisioner
+	reader    application.VolumeReader
 }
 
 // NewController accepts a composed provisioner. Bootstrap supplies the shared
 // application Coordinator, whose lifetime must span all requests of an instance.
-func NewController(cfg Config, allocator application.Provisioner) (*Controller, error) {
+func NewController(cfg Config, allocator application.Provisioner, reader application.VolumeReader) (*Controller, error) {
 	if allocator == nil {
 		return nil, errors.New("CSI controller requires a volume allocator")
+	}
+	if reader == nil {
+		return nil, errors.New("CSI controller requires a volume reader")
 	}
 	probe := domain.Request{Name: "configuration-check", Node: cfg.Node, Storage: cfg.Storage, OwnerVMID: cfg.OwnerVMID, CapacityBytes: domain.GiB}
 	if err := probe.Validate(); err != nil {
@@ -36,7 +40,7 @@ func NewController(cfg Config, allocator application.Provisioner) (*Controller, 
 	if len(probe.Handle()) > 128 {
 		return nil, errors.New("CSI controller node, storage and owner produce a volume handle longer than 128 bytes")
 	}
-	return &Controller{cfg: cfg, allocator: allocator}, nil
+	return &Controller{cfg: cfg, allocator: allocator, reader: reader}, nil
 }
 
 func (c *Controller) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {

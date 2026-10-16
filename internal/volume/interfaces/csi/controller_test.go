@@ -50,11 +50,19 @@ func testCSIVolume(req domain.Request) domain.Volume { return testutil.Confirmed
 
 func newTestCSIController(t *testing.T, allocator application.Provisioner) *Controller {
 	t.Helper()
+	return newTestCSIControllerWithReader(t, allocator, testCSIReader(func(context.Context, domain.Identity) (domain.Volume, error) {
+		t.Error("unexpected volume read")
+		return domain.Volume{}, errors.New("unexpected volume read")
+	}))
+}
+
+func newTestCSIControllerWithReader(t *testing.T, allocator application.Provisioner, reader application.VolumeReader) *Controller {
+	t.Helper()
 	coordinated, err := application.NewCoordinator(allocator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, err := NewController(testCSIConfig(), coordinated)
+	controller, err := NewController(testCSIConfig(), coordinated, reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,9 +78,13 @@ func testCSIContext(t *testing.T) context.Context {
 
 func newTestCSIConnection(t *testing.T, allocator application.Provisioner) *grpc.ClientConn {
 	t.Helper()
+	return connectTestCSIController(t, newTestCSIController(t, allocator))
+}
+
+func connectTestCSIController(t *testing.T, controller *Controller) *grpc.ClientConn {
+	t.Helper()
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
-	controller := newTestCSIController(t, allocator)
 	csiserver.Register(server, controller, "dev-005")
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- server.Serve(listener) }()
@@ -281,8 +293,12 @@ func TestCSITopology(t *testing.T) {
 
 func TestCSIConfiguration(t *testing.T) {
 	allocator := testCSIAllocator(func(_ context.Context, req domain.Request) (domain.Volume, error) { return testCSIVolume(req), nil })
-	if _, err := NewController(testCSIConfig(), nil); err == nil {
+	reader := testCSIReader(func(context.Context, domain.Identity) (domain.Volume, error) { return domain.Volume{}, nil })
+	if _, err := NewController(testCSIConfig(), nil, reader); err == nil {
 		t.Fatal("nil allocator accepted")
+	}
+	if _, err := NewController(testCSIConfig(), allocator, nil); err == nil {
+		t.Fatal("nil reader accepted")
 	}
 	for _, change := range []func(*Config){
 		func(c *Config) { c.Node = "../pve" },
@@ -292,7 +308,7 @@ func TestCSIConfiguration(t *testing.T) {
 	} {
 		cfg := testCSIConfig()
 		change(&cfg)
-		if _, err := NewController(cfg, allocator); err == nil {
+		if _, err := NewController(cfg, allocator, reader); err == nil {
 			t.Errorf("invalid configuration accepted: %+v", cfg)
 		}
 	}

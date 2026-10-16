@@ -34,9 +34,7 @@ func (c *Controller) volumeRequest(req *csi.CreateVolumeRequest) (domain.Request
 		return invalid("at least one volume capability is required")
 	}
 	for _, capability := range req.VolumeCapabilities {
-		mount := capability.GetMount()
-		if mount == nil || capability.GetAccessMode().GetMode() != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER ||
-			(mount.FsType != "" && mount.FsType != "ext4") || len(mount.MountFlags) != 0 || mount.VolumeMountGroup != "" {
+		if !supportedMountCapability(capability) {
 			return invalid("only ext4 mount volumes with SINGLE_NODE_WRITER and no mount flags or mount group are supported")
 		}
 	}

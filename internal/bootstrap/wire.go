@@ -5,6 +5,7 @@ import (
 	"pve-csi.local/csi-plugin/internal/platform/csiserver"
 	"pve-csi.local/csi-plugin/internal/platform/pveapi"
 	"pve-csi.local/csi-plugin/internal/volume/application"
+	"pve-csi.local/csi-plugin/internal/volume/domain"
 	"pve-csi.local/csi-plugin/internal/volume/infrastructure/pve"
 	csidriver "pve-csi.local/csi-plugin/internal/volume/interfaces/csi"
 )
@@ -24,7 +25,11 @@ func NewController(cfg csidriver.Config, client *pveapi.Client) (*csidriver.Cont
 	if err != nil {
 		return nil, err
 	}
-	return csidriver.NewController(cfg, coordinated)
+	reader, err := application.NewReader(gateway, domain.Placement{Node: cfg.Node, Storage: cfg.Storage}, cfg.OwnerVMID)
+	if err != nil {
+		return nil, err
+	}
+	return csidriver.NewController(cfg, coordinated, reader)
 }
 
 func RegisterController(server *grpc.Server, cfg csidriver.Config, client *pveapi.Client) error {
