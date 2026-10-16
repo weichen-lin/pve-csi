@@ -1,0 +1,30 @@
+# Agent-only notes and plans.
+/docs/
+/plan.md
+
+# Local development values; keep only the directory marker.
+/data/dev/*
+!/data/dev/.gitkeep
+
+# Credentials and environment files must not enter Git from other locations.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.kubeconfig
+kubeconfig
+
+# Local build, test and editor output.
+/bin/
+/dist/
+/coverage/
+*.test
+*.out
+*.prof
+*.tar
+*.tar.gz
+.DS_Store
+.idea/
+.vscode/
