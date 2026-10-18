@@ -27,11 +27,7 @@ func Run(ctx context.Context, out, usage io.Writer, getenv func(string) string, 
 	}
 	flags := flag.NewFlagSet("controller", flag.ContinueOnError)
 	flags.SetOutput(usage)
-	defaultEndpoint := getenv("CSI_ENDPOINT")
-	if defaultEndpoint == "" {
-		defaultEndpoint = "unix:///tmp/pve-csi.sock"
-	}
-	endpoint := flags.String("endpoint", defaultEndpoint, "local CSI Unix socket URL (or CSI_ENDPOINT)")
+	endpoint := flags.String("endpoint", "unix:///tmp/pve-csi.sock", "local CSI Unix socket URL")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -79,4 +75,4 @@ func serveController(ctx context.Context, out io.Writer, endpoint string, cfg cs
 	return csidriver.Serve(ctx, endpoint, server, out)
 }
 
-const Version = "dev-006"
+const Version = "dev-009"

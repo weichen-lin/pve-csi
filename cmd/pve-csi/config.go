@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	csidriver "pve-csi.local/csi-plugin/internal/csi"
-	"pve-csi.local/csi-plugin/internal/domain"
 	"pve-csi.local/csi-plugin/internal/pve"
 )
 
@@ -34,9 +33,12 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, errors.New("PVE_OWNER_VMID could not be parsed")
 	}
-	controller := csidriver.Config{Node: strings.TrimSpace(getenv("PVE_NODE")), OwnerVMID: vmid}
-	if !domain.ValidNodeName(controller.Node) {
-		return Config{}, errors.New("PVE_NODE must be a valid PVE node name")
+	controller := csidriver.Config{
+		DriverName: strings.TrimSpace(getenv("CSI_DRIVER_NAME")),
+		Node:       strings.TrimSpace(getenv("PVE_NODE")), OwnerVMID: vmid,
+	}
+	if err := controller.Validate(); err != nil {
+		return Config{}, err
 	}
 	return Config{Connection: connection, Controller: controller}, nil
 }

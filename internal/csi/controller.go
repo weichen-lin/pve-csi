@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -17,9 +18,37 @@ import (
 )
 
 type Config struct {
-	Node      string
-	OwnerVMID int
+	DriverName string
+	Node       string
+	OwnerVMID  int
 }
+
+var dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+// CSI limits both the driver name and the optional topology prefix to 63 bytes.
+func validDNSName(name string) bool {
+	if len(name) == 0 || len(name) > 63 {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if !dnsLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func (cfg Config) Validate() error {
+	if !validDNSName(cfg.DriverName) {
+		return errors.New("CSI_DRIVER_NAME is required and must be a lowercase DNS name of at most 63 bytes")
+	}
+	if err := domain.ValidateOwnerScope(cfg.Node, cfg.OwnerVMID); err != nil {
+		return fmt.Errorf("invalid PVE_NODE or PVE_OWNER_VMID: %w", err)
+	}
+	return nil
+}
+
+func (cfg Config) TopologyKey() string { return cfg.DriverName + "/pve-node" }
 
 type Controller struct {
 	csi.UnimplementedControllerServer
@@ -35,7 +64,7 @@ func NewController(cfg Config, allocator Provisioner, reader VolumeReader) (*Con
 	if reader == nil {
 		return nil, errors.New("CSI controller requires a volume reader")
 	}
-	if err := domain.ValidateOwnerScope(cfg.Node, cfg.OwnerVMID); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid CSI controller configuration: %w", err)
 	}
 	return &Controller{cfg: cfg, allocator: allocator, reader: reader}, nil
@@ -58,7 +87,7 @@ func (c *Controller) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequ
 	}
 	return &csi.CreateVolumeResponse{Volume: &csi.Volume{
 		VolumeId: volume.ID(), CapacityBytes: volume.CapacityBytes(),
-		AccessibleTopology: []*csi.Topology{{Segments: map[string]string{pveNodeTopologyKey: volume.Placement().Node}}},
+		AccessibleTopology: []*csi.Topology{{Segments: map[string]string{c.cfg.TopologyKey(): volume.Placement().Node}}},
 	}}, nil
 }
 
@@ -98,8 +127,6 @@ type Provisioner interface {
 type VolumeReader interface {
 	GetVolume(context.Context, domain.Identity) (domain.Volume, error)
 }
-
-const pveNodeTopologyKey = "pve-csi.local/pve-node"
 
 func (c *Controller) volumeRequest(req *csi.CreateVolumeRequest) (domain.Request, error) {
 	invalid := func(message string) (domain.Request, error) {
@@ -172,16 +199,16 @@ func (c *Controller) validateTopology(requirements *csi.TopologyRequirement) err
 	for _, group := range [][]*csi.Topology{requirements.Requisite, requirements.Preferred} {
 		for _, topology := range group {
 			segments := topology.GetSegments()
-			node := segments[pveNodeTopologyKey]
+			node := segments[c.cfg.TopologyKey()]
 			if len(segments) != 1 || !domain.ValidNodeName(node) {
-				return status.Error(codes.InvalidArgument, "topology must specify only a valid PVE node segment")
+				return status.Errorf(codes.InvalidArgument, "topology must specify only %s with a valid PVE node name", c.cfg.TopologyKey())
 			}
 		}
 	}
 	// Preferred is advisory. An empty requisite list imposes no restriction.
 	if len(requirements.Requisite) != 0 {
 		for _, topology := range requirements.Requisite {
-			if topology.Segments[pveNodeTopologyKey] == c.cfg.Node {
+			if topology.Segments[c.cfg.TopologyKey()] == c.cfg.Node {
 				return nil
 			}
 		}

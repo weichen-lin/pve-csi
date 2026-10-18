@@ -73,22 +73,21 @@ func Serve(ctx context.Context, endpoint string, server *grpc.Server, out io.Wri
 
 // Register accepts already composed services. It neither opens a listener nor
 // initializes PVE connections.
-func Register(server *grpc.Server, controller csi.ControllerServer, version string) {
-	csi.RegisterIdentityServer(server, NewIdentity(version))
+func Register(server *grpc.Server, controller *Controller, version string) {
+	csi.RegisterIdentityServer(server, NewIdentity(controller.cfg.DriverName, version))
 	csi.RegisterControllerServer(server, controller)
 }
 
-const DriverName = "pve-csi.local"
-
 type Identity struct {
 	csi.UnimplementedIdentityServer
+	name    string
 	version string
 }
 
-func NewIdentity(version string) *Identity { return &Identity{version: version} }
+func NewIdentity(name, version string) *Identity { return &Identity{name: name, version: version} }
 
 func (s *Identity) GetPluginInfo(context.Context, *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
-	return &csi.GetPluginInfoResponse{Name: DriverName, VendorVersion: s.version}, nil
+	return &csi.GetPluginInfoResponse{Name: s.name, VendorVersion: s.version}, nil
 }
 
 func (s *Identity) GetPluginCapabilities(context.Context, *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {

@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: pve-csi
+resources:
+  - controller.yaml
+  - storageclass.yaml
+# PVC is applied separately: deploying the controller must not allocate a disk.
+configMapGenerator:
+  - name: pve-csi-config
+    envs: [config.env]
+images:
+  - name: pve-csi
+    newTag: dev-009
+replacements:
+  - source:
+      kind: ConfigMap
+      name: pve-csi-config
+      fieldPath: data.CSI_DRIVER_NAME
+    targets:
+      - select:
+          kind: StorageClass
+        fieldPaths: [provisioner]
+  - source:
+      kind: ConfigMap
+      name: pve-csi-config
+      fieldPath: data.CSI_DRIVER_NAME
+    targets:
+      - select:
+          kind: StorageClass
+        fieldPaths: [allowedTopologies.0.matchLabelExpressions.0.key]
+        options:
+          delimiter: /
+          index: 0
+  - source:
+      kind: ConfigMap
+      name: pve-csi-config
+      fieldPath: data.PVE_NODE
+    targets:
+      - select:
+          kind: StorageClass
+        fieldPaths: [allowedTopologies.0.matchLabelExpressions.0.values.0]
