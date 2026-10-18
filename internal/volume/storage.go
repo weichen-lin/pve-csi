@@ -2,6 +2,7 @@ package volume
 
 import (
 	"errors"
+	"fmt"
 
 	"pve-csi.local/csi-plugin/internal/domain"
 )
@@ -9,8 +10,9 @@ import (
 // StorageAccess contains effective capabilities for the requested pool, not
 // PVE role names or ACLs. Authorization is an application policy.
 type StorageAccess struct {
-	CanInspect  bool
-	CanAllocate bool
+	CanInspect            bool
+	CanAllocate           bool
+	AllocationRequirement string
 }
 
 type PoolState struct {
@@ -25,16 +27,18 @@ func (s PoolState) CheckReadable() error {
 	return s.Pool.CheckReady()
 }
 
-// CheckAllocatable applies only to a new allocation. Reusing a confirmed
+// CheckAllocationPermission applies only to a new allocation. Reusing a confirmed
 // volume requires neither spare capacity nor allocation permission.
-func (s PoolState) CheckAllocatable(requestedBytes int64) error {
-	if err := s.CheckReadable(); err != nil {
+func (s PoolState) CheckAllocationPermission() error {
+	if !s.Access.CanAllocate {
+		err := NewBackendError(FailurePermissionDenied, nil)
+		err.Hint = "storage allocation permission is required"
+		if s.Access.AllocationRequirement != "" {
+			err.Hint = "missing " + s.Access.AllocationRequirement + "; check both user and token permissions"
+		}
 		return err
 	}
-	if !s.Access.CanAllocate {
-		return NewBackendError(FailurePermissionDenied, errors.New("storage allocation permission is required"))
-	}
-	return s.Pool.CheckCapacity(requestedBytes)
+	return nil
 }
 
 var (
@@ -51,12 +55,15 @@ const (
 	FailurePermissionDenied
 	FailureNotFound
 	FailureUnavailable
+	FailurePrecondition
 )
 
 // BackendError carries classification across the port without exposing an HTTP
 // DTO. Context cancellation remains discoverable through Unwrap.
 type BackendError struct {
-	Kind  FailureKind
+	Kind FailureKind
+	// Hint is authored by the adapter, never copied from an HTTP response or token.
+	Hint  string
 	cause error
 }
 
@@ -66,3 +73,21 @@ func NewBackendError(kind FailureKind, cause error) *BackendError {
 
 func (e *BackendError) Error() string { return "volume backend operation failed" }
 func (e *BackendError) Unwrap() error { return e.cause }
+
+// StepError identifies the failed operation. Target contains only validated
+// resource identifiers; underlying backend messages are not sent to CSI clients.
+type StepError struct {
+	Step   string
+	Target string
+	cause  error
+}
+
+func AtStep(step, target string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &StepError{Step: step, Target: target, cause: err}
+}
+
+func (e *StepError) Error() string { return fmt.Sprintf("[%s] %s: %v", e.Step, e.Target, e.cause) }
+func (e *StepError) Unwrap() error { return e.cause }

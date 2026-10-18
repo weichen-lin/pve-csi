@@ -25,7 +25,7 @@ func NewService(storage StorageGateway) (*Service, error) {
 
 func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.Volume, error) {
 	if err := req.Validate(); err != nil {
-		return domain.Volume{}, err
+		return domain.Volume{}, AtStep("validate_request", "volume", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return domain.Volume{}, err
@@ -44,21 +44,25 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 		delete(s.inFlight, req.Name)
 		s.mu.Unlock()
 	}()
-	pool, err := s.storage.InspectPool(ctx, req.Placement())
+	target := req.Node + "/" + req.Storage
+	pool, err := s.storage.InspectPool(ctx, req.Placement(), req.OwnerVMID)
 	if err != nil {
 		return domain.Volume{}, err
 	}
 	if err := pool.CheckReadable(); err != nil {
-		return domain.Volume{}, err
+		return domain.Volume{}, AtStep("check_storage_status", target, err)
 	}
 	if existing, found, err := s.observe(ctx, req); err != nil {
-		return domain.Volume{}, err
+		return domain.Volume{}, AtStep("lookup_volume", target, err)
 	} else if found {
 		return existing, nil
 	}
 	// This observation is a preflight, not a capacity reservation.
-	if err := pool.CheckAllocatable(req.CapacityBytes); err != nil {
-		return domain.Volume{}, err
+	if err := pool.CheckAllocationPermission(); err != nil {
+		return domain.Volume{}, AtStep("check_allocation_permission", target, err)
+	}
+	if err := pool.Pool.CheckCapacity(req.CapacityBytes); err != nil {
+		return domain.Volume{}, AtStep("check_capacity", target, err)
 	}
 	receipt, postErr := s.storage.Allocate(ctx, req)
 	unexpectedID := postErr == nil && receipt.Reference != req.AllocationReference()
@@ -72,9 +76,15 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 		return actual, nil
 	}
 	if lookupErr == nil && !found {
+		// Authentication/authorization/route rejection is a definite failure,
+		// unlike a lost connection or 5xx after the server accepted the write.
+		var backendErr *BackendError
+		if errors.As(postErr, &backendErr) && (backendErr.Kind == FailureUnauthenticated || backendErr.Kind == FailurePermissionDenied || backendErr.Kind == FailureNotFound) {
+			return domain.Volume{}, AtStep("allocate_volume", target, postErr)
+		}
 		lookupErr = errors.New("expected volume is not visible in PVE storage content")
 	}
-	return domain.Volume{}, fmt.Errorf("%w; retry with the same name, node, storage and owner: %w", ErrUnconfirmed, errors.Join(postErr, lookupErr))
+	return domain.Volume{}, AtStep("confirm_volume", target, fmt.Errorf("%w: %w", ErrUnconfirmed, errors.Join(postErr, lookupErr)))
 }
 
 func (s *Service) observe(ctx context.Context, req domain.Request) (domain.Volume, bool, error) {
@@ -91,7 +101,7 @@ type AllocationReceipt struct{ Reference string }
 // StorageGateway is owned by this use case. Lookup false means not observed;
 // permission filtering or a remote write can still hide an existing allocation.
 type StorageGateway interface {
-	InspectPool(context.Context, domain.Placement) (PoolState, error)
+	InspectPool(context.Context, domain.Placement, int) (PoolState, error)
 	Lookup(context.Context, domain.Request) (domain.Allocation, bool, error)
 	Allocate(context.Context, domain.Request) (AllocationReceipt, error)
 }

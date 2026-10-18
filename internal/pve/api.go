@@ -92,6 +92,7 @@ var storageIDPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]*$`)
 type StoragePermissions struct {
 	Audit         bool
 	AllocateSpace bool
+	Allocate      bool
 }
 
 func (c *Client) StoragePermissions(ctx context.Context, storageID string) (StoragePermissions, error) {
@@ -99,23 +100,44 @@ func (c *Client) StoragePermissions(ctx context.Context, storageID string) (Stor
 		return StoragePermissions{}, errors.New("permissions query requires a valid storage ID")
 	}
 	path := "/storage/" + storageID
+	privileges, err := c.permissions(ctx, path)
+	if err != nil {
+		return StoragePermissions{}, err
+	}
+	_, audit := privileges["Datastore.Audit"]
+	_, space := privileges["Datastore.AllocateSpace"]
+	_, allocate := privileges["Datastore.Allocate"]
+	return StoragePermissions{Audit: audit, AllocateSpace: space, Allocate: allocate}, nil
+}
+
+func (c *Client) CanConfigureDisk(ctx context.Context, owner int) (bool, error) {
+	if owner < 100 || owner > 999999999 {
+		return false, errors.New("invalid disk owner VMID")
+	}
+	privileges, err := c.permissions(ctx, "/vms/"+strconv.Itoa(owner))
+	if err != nil {
+		return false, err
+	}
+	_, allowed := privileges["VM.Config.Disk"]
+	return allowed, nil
+}
+
+func (c *Client) permissions(ctx context.Context, path string) (map[string]*int, error) {
 	query := url.Values{"path": {path}}
 	var paths map[string]map[string]*int
 	if err := c.getData(ctx, "/api2/json/access/permissions?"+query.Encode(), &paths); err != nil {
-		return StoragePermissions{}, err
+		return nil, err
 	}
 	privileges, found := paths[path]
 	if found && privileges == nil {
-		return StoragePermissions{}, errors.New("PVE storage permissions must be an object")
+		return nil, errors.New("PVE permissions must be an object")
 	}
 	for _, propagate := range privileges {
 		if propagate == nil || (*propagate != 0 && *propagate != 1) {
-			return StoragePermissions{}, errors.New("PVE permissions contain an invalid propagation flag")
+			return nil, errors.New("PVE permissions contain an invalid propagation flag")
 		}
 	}
 	// The value is propagation, not a grant boolean. A present privilege with
 	// value 0 still grants access at this exact path. Never infer parent grants.
-	_, audit := privileges["Datastore.Audit"]
-	_, allocate := privileges["Datastore.AllocateSpace"]
-	return StoragePermissions{Audit: audit, AllocateSpace: allocate}, nil
+	return privileges, nil
 }

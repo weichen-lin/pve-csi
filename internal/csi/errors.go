@@ -3,6 +3,7 @@ package csidriver
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -19,50 +20,79 @@ func csiReadError(err error) error {
 	}
 	switch {
 	case errors.Is(err, domain.ErrInvalidHandle):
-		return status.Error(codes.InvalidArgument, "invalid v1 volume ID")
+		return stepStatus(err, codes.InvalidArgument, "invalid v1 volume ID")
 	case errors.Is(err, volume.ErrNotFound):
-		return status.Error(codes.NotFound, "volume was not found in the configured scope")
+		return stepStatus(err, codes.NotFound, "volume was not found in the configured scope")
 	case errors.Is(err, domain.ErrConflict):
-		return status.Error(codes.FailedPrecondition, "volume metadata does not match the expected identity or capacity")
+		return stepStatus(err, codes.FailedPrecondition, "volume metadata does not match the expected identity or capacity")
 	default:
 		return csiBackendError(err)
 	}
 }
 
 func csiBackendError(err error) error {
+	if errors.Is(err, volume.ErrUnconfirmed) {
+		message := "allocation outcome is unknown; disk may already exist; retry with the same name, node, storage and owner"
+		var backendErr *volume.BackendError
+		if errors.As(err, &backendErr) {
+			_, detail := backendFailure(backendErr)
+			message += "; " + detail
+		} else if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			message += "; request was canceled or timed out before confirmation"
+		}
+		return stepStatus(err, codes.Unavailable, message)
+	}
 	switch {
 	case errors.Is(err, context.Canceled):
-		return status.Error(codes.Canceled, "volume request canceled")
+		return stepStatus(err, codes.Canceled, "volume request canceled")
 	case errors.Is(err, context.DeadlineExceeded):
-		return status.Error(codes.DeadlineExceeded, "volume request deadline exceeded; retry with the same name and configuration")
+		return stepStatus(err, codes.DeadlineExceeded, "volume request deadline exceeded; retry with the same name and configuration")
 	case errors.Is(err, volume.ErrBusy):
-		return status.Error(codes.Aborted, "a CreateVolume request for this name is already in progress; retry")
-	case errors.Is(err, volume.ErrUnconfirmed):
-		return status.Error(codes.Unavailable, "allocation outcome is unconfirmed; retry with the same name and configuration")
+		return stepStatus(err, codes.Aborted, "a CreateVolume request for this name is already in progress; retry")
 	case errors.Is(err, domain.ErrConflict):
-		return status.Error(codes.AlreadyExists, "an incompatible volume already exists for this name")
+		return stepStatus(err, codes.AlreadyExists, "an incompatible volume already exists for this name")
 	case errors.Is(err, domain.ErrCapacity):
-		return status.Error(codes.ResourceExhausted, "storage has insufficient available capacity")
+		return stepStatus(err, codes.ResourceExhausted, "storage has insufficient available capacity")
 	case errors.Is(err, domain.ErrPoolDisabled):
-		return status.Error(codes.FailedPrecondition, "requested storage pool is disabled")
+		return stepStatus(err, codes.FailedPrecondition, "requested storage pool is disabled")
 	case errors.Is(err, domain.ErrPoolInactive):
-		return status.Error(codes.FailedPrecondition, "requested storage pool is inactive")
+		return stepStatus(err, codes.FailedPrecondition, "requested storage pool is inactive")
 	case errors.Is(err, domain.ErrStorage):
-		return status.Error(codes.FailedPrecondition, "storage does not support the required allocation format")
+		return stepStatus(err, codes.FailedPrecondition, "storage does not support the required allocation format")
 	}
 	var backendErr *volume.BackendError
 	if errors.As(err, &backendErr) {
-		switch backendErr.Kind {
-		case volume.FailureUnauthenticated:
-			return status.Error(codes.Unauthenticated, "PVE authentication failed")
-		case volume.FailurePermissionDenied:
-			return status.Error(codes.PermissionDenied, "PVE denied the storage operation")
-		case volume.FailureNotFound:
-			return status.Error(codes.FailedPrecondition, "requested PVE storage was not found")
-		case volume.FailureUnavailable:
-			return status.Error(codes.Unavailable, "PVE service is temporarily unavailable")
-		}
+		code, message := backendFailure(backendErr)
+		return stepStatus(err, code, message)
 	}
 	// Backend error messages may carry transport details or untrusted data.
-	return status.Error(codes.Internal, "volume backend operation failed")
+	return stepStatus(err, codes.Internal, "volume backend operation failed")
+}
+
+func backendFailure(err *volume.BackendError) (codes.Code, string) {
+	code, message := codes.Internal, "PVE returned an invalid or unexpected response"
+	switch err.Kind {
+	case volume.FailureUnauthenticated:
+		code, message = codes.Unauthenticated, "PVE authentication failed; check PVE_TOKEN_ID and PVE_TOKEN_SECRET"
+	case volume.FailurePermissionDenied:
+		code, message = codes.PermissionDenied, "PVE denied the operation; check both user and token permissions"
+	case volume.FailureNotFound:
+		code, message = codes.FailedPrecondition, "PVE resource was not found; check the node and storage names"
+	case volume.FailureUnavailable:
+		code, message = codes.Unavailable, "PVE is unavailable; check network connectivity and PVE service status"
+	case volume.FailurePrecondition:
+		code, message = codes.FailedPrecondition, "PVE connection configuration is invalid"
+	}
+	if err.Hint != "" {
+		message = err.Hint
+	}
+	return code, message
+}
+
+func stepStatus(err error, code codes.Code, message string) error {
+	var step *volume.StepError
+	if errors.As(err, &step) {
+		message = fmt.Sprintf("[%s] %s: %s", step.Step, step.Target, message)
+	}
+	return status.Error(code, message)
 }

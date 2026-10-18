@@ -2,8 +2,12 @@ package pve
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"pve-csi.local/csi-plugin/internal/domain"
@@ -22,14 +26,14 @@ func NewStorageGateway(client *Client) (*StorageGateway, error) {
 	return &StorageGateway{client: client}, nil
 }
 
-func (g *StorageGateway) InspectPool(ctx context.Context, placement domain.Placement) (volume.PoolState, error) {
-	permissions, err := g.client.StoragePermissions(ctx, placement.Storage)
+func (g *StorageGateway) InspectPool(ctx context.Context, placement domain.Placement, owner int) (volume.PoolState, error) {
+	permissions, err := g.checkReadAccess(ctx, placement, owner)
 	if err != nil {
-		return volume.PoolState{}, mapError(err)
+		return volume.PoolState{}, err
 	}
 	storage, err := g.client.Storage(ctx, placement.Node, placement.Storage)
 	if err != nil {
-		return volume.PoolState{}, mapError(err)
+		return volume.PoolState{}, volume.AtStep("check_storage_status", placement.Node+"/"+placement.Storage, mapError(err))
 	}
 	supportsImages := false
 	for _, content := range strings.Split(storage.Content, ",") {
@@ -44,13 +48,42 @@ func (g *StorageGateway) InspectPool(ctx context.Context, placement domain.Place
 			SupportsVolumes: storage.Type == "lvmthin" && supportsImages,
 			AvailableBytes:  storage.Avail,
 		},
-		// PVE status/content GET accepts either privilege; allocation requires
-		// AllocateSpace. Keep that backend-specific rule out of volume.
+		// checkReadAccess verifies both endpoint and per-disk visibility.
 		Access: volume.StorageAccess{
-			CanInspect:  permissions.Audit || permissions.AllocateSpace,
-			CanAllocate: permissions.AllocateSpace,
+			CanInspect:            true,
+			CanAllocate:           permissions.AllocateSpace,
+			AllocationRequirement: "Datastore.AllocateSpace on /storage/" + placement.Storage,
 		},
 	}, nil
+}
+
+func missingPrivilege(path, privilege string) error {
+	return &volume.BackendError{Kind: volume.FailurePermissionDenied,
+		Hint: "missing " + privilege + " on " + path + "; check both user and token permissions"}
+}
+
+func (g *StorageGateway) checkReadAccess(ctx context.Context, placement domain.Placement, owner int) (StoragePermissions, error) {
+	path := "/storage/" + placement.Storage
+	permissions, err := g.client.StoragePermissions(ctx, placement.Storage)
+	if err != nil {
+		return StoragePermissions{}, volume.AtStep("check_storage_permissions", path, mapError(err))
+	}
+	// Content/status endpoints require Audit or AllocateSpace. Individual disk
+	// visibility additionally requires Allocate OR (Audit AND VM.Config.Disk).
+	if !permissions.Audit && !permissions.AllocateSpace || !permissions.Allocate && !permissions.Audit {
+		return StoragePermissions{}, volume.AtStep("check_storage_permissions", path, missingPrivilege(path, "Datastore.Audit"))
+	}
+	if !permissions.Allocate {
+		path = "/vms/" + strconv.Itoa(owner)
+		allowed, err := g.client.CanConfigureDisk(ctx, owner)
+		if err != nil {
+			return StoragePermissions{}, volume.AtStep("check_owner_permissions", path, mapError(err))
+		}
+		if !allowed {
+			return StoragePermissions{}, volume.AtStep("check_owner_permissions", path, missingPrivilege(path, "VM.Config.Disk"))
+		}
+	}
+	return permissions, nil
 }
 
 func (g *StorageGateway) Lookup(ctx context.Context, req domain.Request) (domain.Allocation, bool, error) {
@@ -84,6 +117,11 @@ func (g *StorageGateway) lookup(ctx context.Context, placement domain.Placement,
 		matched = entry
 	}
 	if matched == nil {
+		// A permission change can turn an existing disk into an empty list.
+		// Recheck before treating that observation as absence.
+		if _, err := g.checkReadAccess(ctx, placement, owner); err != nil {
+			return domain.Allocation{}, false, err
+		}
 		return domain.Allocation{}, false, nil
 	}
 	if matched.Format != "raw" || matched.Content != "images" {
@@ -105,6 +143,7 @@ func mapError(err error) error {
 		return nil
 	}
 	kind := volume.FailureInternal
+	hint := ""
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) {
 		switch httpErr.StatusCode {
@@ -119,6 +158,21 @@ func mapError(err error) error {
 				kind = volume.FailureUnavailable
 			}
 		}
+	} else {
+		var certificateErr *tls.CertificateVerificationError
+		var hostnameErr x509.HostnameError
+		var authorityErr x509.UnknownAuthorityError
+		var networkErr net.Error
+		switch {
+		case errors.As(err, &certificateErr), errors.As(err, &hostnameErr), errors.As(err, &authorityErr):
+			kind = volume.FailurePrecondition
+			hint = "PVE TLS certificate verification failed; check PVE_CA_FILE and the hostname in PVE_ENDPOINT"
+		case errors.As(err, &networkErr):
+			kind = volume.FailureUnavailable
+			hint = "cannot reach PVE; check PVE_ENDPOINT and network connectivity"
+		}
 	}
-	return volume.NewBackendError(kind, err)
+	backendErr := volume.NewBackendError(kind, err)
+	backendErr.Hint = hint
+	return backendErr
 }

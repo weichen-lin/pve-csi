@@ -46,7 +46,7 @@ func (c *Controller) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequ
 	}
 	backendReq, err := c.volumeRequest(req)
 	if err != nil {
-		return nil, err
+		return nil, status.Errorf(status.Code(err), "[validate_request] %s", status.Convert(err).Message())
 	}
 	volume, err := c.allocator.EnsureVolume(ctx, backendReq)
 	if err != nil {

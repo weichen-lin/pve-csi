@@ -33,27 +33,29 @@ func (r *Reader) GetVolume(ctx context.Context, id domain.Identity) (domain.Volu
 	if id.Placement().Node != r.node || id.OwnerVMID() != r.owner {
 		return domain.Volume{}, ErrNotFound
 	}
-	pool, err := r.storage.InspectPool(ctx, id.Placement())
+	target := id.Placement().Node + "/" + id.Placement().Storage
+	pool, err := r.storage.InspectPool(ctx, id.Placement(), id.OwnerVMID())
 	if err != nil {
 		return domain.Volume{}, err
 	}
 	if err := pool.CheckReadable(); err != nil {
-		return domain.Volume{}, err
+		return domain.Volume{}, AtStep("check_storage_status", target, err)
 	}
 	observed, found, err := r.storage.LookupVolume(ctx, id)
 	if err != nil {
-		return domain.Volume{}, err
+		return domain.Volume{}, AtStep("lookup_volume", target, err)
 	}
 	if !found {
 		// Permission filtering can also hide volumes. This is not evidence
 		// that deletion occurred or permission to allocate another volume.
-		return domain.Volume{}, ErrNotFound
+		return domain.Volume{}, AtStep("lookup_volume", target, ErrNotFound)
 	}
-	return domain.Restore(id, observed)
+	result, err := domain.Restore(id, observed)
+	return result, AtStep("lookup_volume", target, err)
 }
 
 // ReadGateway deliberately exposes no allocation or deletion operation.
 type ReadGateway interface {
-	InspectPool(context.Context, domain.Placement) (PoolState, error)
+	InspectPool(context.Context, domain.Placement, int) (PoolState, error)
 	LookupVolume(context.Context, domain.Identity) (domain.Allocation, bool, error)
 }
