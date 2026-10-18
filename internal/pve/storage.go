@@ -210,7 +210,10 @@ func mapError(err error) error {
 	kind := volume.FailureInternal
 	hint := ""
 	var httpErr *HTTPError
-	if errors.As(err, &httpErr) {
+	if errors.Is(err, ErrStorageNotFound) {
+		kind = volume.FailureNotFound
+		hint = "PVE storage was not found; check the storage parameter in StorageClass"
+	} else if errors.As(err, &httpErr) {
 		switch httpErr.StatusCode {
 		case http.StatusUnauthorized:
 			kind = volume.FailureUnauthenticated

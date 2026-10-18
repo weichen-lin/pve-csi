@@ -124,8 +124,7 @@ func (c *Client) requestData(ctx context.Context, method, apiPath string, form u
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		// Do not print a response body: a server could echo request credentials.
-		return &HTTPError{Method: method, Path: apiPath, StatusCode: resp.StatusCode}
+		return decodeAPIError(&HTTPError{Method: method, Path: apiPath, StatusCode: resp.StatusCode}, resp.Body)
 	}
 
 	const maxResponseBytes = 8 << 20
@@ -162,4 +161,27 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string {
 	return fmt.Sprintf("PVE %s %s: HTTP %d (%s)", e.Method, e.Path, e.StatusCode, http.StatusText(e.StatusCode))
+}
+
+var ErrStorageNotFound = errors.New("PVE storage not found")
+
+// decodeAPIError translates recognized PVE errors while preserving HTTP facts.
+// Unrecognized or unreadable bodies remain HTTP errors; response text is never retained.
+func decodeAPIError(httpErr *HTTPError, response io.Reader) error {
+	if httpErr.StatusCode != http.StatusBadRequest {
+		return httpErr
+	}
+	const maxErrorBytes = 64 << 10
+	body, err := io.ReadAll(io.LimitReader(response, maxErrorBytes+1))
+	if err != nil || len(body) > maxErrorBytes {
+		return httpErr
+	}
+	var validation struct {
+		Errors map[string]string `json:"errors"`
+	}
+	// PVE reports missing storage as a field validation error instead of HTTP 404.
+	if json.Unmarshal(body, &validation) == nil && len(validation.Errors) == 1 && validation.Errors["storage"] == "No such storage." {
+		return fmt.Errorf("%w: %w", ErrStorageNotFound, httpErr)
+	}
+	return httpErr
 }
