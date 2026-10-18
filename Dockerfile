@@ -19,3 +19,4 @@ COPY --from=build --chmod=0555 /out/pve-csi /usr/local/bin/pve-csi
 USER 65532:65532
 WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/pve-csi"]
+CMD ["controller"]

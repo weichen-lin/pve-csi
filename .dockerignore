@@ -8,5 +8,3 @@
 !internal/
 !internal/**/
 !internal/**/*.go
-**/*_test.go
-internal/testutil/
