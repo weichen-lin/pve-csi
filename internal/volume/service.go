@@ -30,20 +30,10 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 	if err := ctx.Err(); err != nil {
 		return domain.Volume{}, err
 	}
-	s.mu.Lock()
-	_, busy := s.inFlight[req.Name]
-	if !busy {
-		s.inFlight[req.Name] = struct{}{}
-	}
-	s.mu.Unlock()
-	if busy {
+	if !s.acquire(req.Handle()) {
 		return domain.Volume{}, ErrBusy
 	}
-	defer func() {
-		s.mu.Lock()
-		delete(s.inFlight, req.Name)
-		s.mu.Unlock()
-	}()
+	defer s.release(req.Handle())
 	target := req.Node + "/" + req.Storage
 	pool, err := s.storage.InspectPool(ctx, req.Placement(), req.OwnerVMID)
 	if err != nil {
@@ -51,6 +41,9 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 	}
 	if err := pool.CheckReadable(); err != nil {
 		return domain.Volume{}, AtStep("check_storage_status", target, err)
+	}
+	if err := s.storage.CheckIdle(ctx, req.Placement(), req.OwnerVMID); err != nil {
+		return domain.Volume{}, err
 	}
 	if existing, found, err := s.observe(ctx, req); err != nil {
 		return domain.Volume{}, AtStep("lookup_volume", target, err)
@@ -87,6 +80,22 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 	return domain.Volume{}, AtStep("confirm_volume", target, fmt.Errorf("%w: %w", ErrUnconfirmed, errors.Join(postErr, lookupErr)))
 }
 
+func (s *Service) acquire(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, busy := s.inFlight[id]; busy {
+		return false
+	}
+	s.inFlight[id] = struct{}{}
+	return true
+}
+
+func (s *Service) release(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.inFlight, id)
+}
+
 func (s *Service) observe(ctx context.Context, req domain.Request) (domain.Volume, bool, error) {
 	allocation, found, err := s.storage.Lookup(ctx, req)
 	if err != nil || !found {
@@ -101,7 +110,10 @@ type AllocationReceipt struct{ Reference string }
 // StorageGateway is owned by this use case. Lookup false means not observed;
 // permission filtering or a remote write can still hide an existing allocation.
 type StorageGateway interface {
-	InspectPool(context.Context, domain.Placement, int) (PoolState, error)
+	ReadGateway
+	CheckIdle(context.Context, domain.Placement, int) error
 	Lookup(context.Context, domain.Request) (domain.Allocation, bool, error)
 	Allocate(context.Context, domain.Request) (AllocationReceipt, error)
+	CheckDeletion(context.Context, domain.Identity) error
+	Delete(context.Context, domain.Identity) error
 }

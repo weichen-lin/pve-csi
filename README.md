@@ -1,6 +1,6 @@
 # pve-csi
 
-目前提供 CSI `CreateVolume`、`ValidateVolumeCapabilities` 與 Identity 服務，使用 Unix socket。支援 PVE LVM-thin／raw 磁碟；尚未提供刪碟、接到 VM、掛載及完整 PVC 自動供應。
+目前提供 CSI `CreateVolume`、`DeleteVolume`、`ValidateVolumeCapabilities` 與 Identity 服務，使用 Unix socket，宣告 `CREATE_DELETE_VOLUME`。支援 PVE LVM-thin／raw 磁碟；尚未提供接到 VM、掛載及完整 PVC 自動供應。
 
 ## DDD 分層
 
@@ -37,6 +37,23 @@
 
 依據：[PVE 磁碟存取權限](https://github.com/proxmox/pve-storage/blob/master/src/PVE/Storage.pm)、[PVE 建碟與清單 API](https://github.com/proxmox/pve-storage/blob/master/src/PVE/API2/Storage/Content.pm)。
 
+## 刪碟檢查與錯誤
+
+| 步驟 | 行為／失敗提醒 |
+|---|---|
+| `validate_delete_request`／`validate_delete_scope` | 只接受本服務的 v1 磁碟識別，node 與 owner 必須符合設定；格式錯誤或超出範圍就拒絕 |
+| 儲存池與讀取權限 | 與建碟共用預檢；查詢失敗不會當成磁碟不存在 |
+| `check_pending_deletion` | 同一 owner／storage 有可見的 PVE 刪碟工作仍在執行時，建碟與刪碟都回 `Aborted`，稍後重試 |
+| `lookup_delete_volume`／`validate_delete_volume` | 確認磁碟不存在就成功；存在則核對識別、格式、容量及歸屬，不符就拒絕 |
+| `check_deletion_permission` | 存在的磁碟要求 `/storage/<storage>` 的 `Datastore.Allocate`；不足回 `PermissionDenied` |
+| `check_deletion_owner` | owner 必須是預留且未建立 VM／CT 的編號；已被使用回 `FailedPrecondition` |
+| `delete_volume`／`wait_deletion_task` | 送出一次 DELETE，等待 PVE 背景工作完成（最多 30 秒，或呼叫端較短的期限）；工作失敗提示查看 PVE Tasks |
+| `confirm_delete` | 再查磁碟確實消失才成功；無法確認回 `Unavailable`，呼叫端期限到也可能收到 `DeadlineExceeded`，用相同 `volume_id` 重試 |
+
+目前限單一 controller、專用 owner 下的未掛載磁碟；不可把這些磁碟手動接到其他 VM 或建立快照。owner 檢查不是跨 VM 的掛載／快照追蹤，也不是遠端鎖定。建刪操作在同一程序內共用磁碟鎖；重啟後透過 PVE 可見的背景工作避免立即重送，沒有本地操作紀錄檔。不同 controller 或管理員同時修改不在目前協調範圍。
+
+`Datastore.Allocate` 是儲存池管理權限，比建碟的 `Datastore.AllocateSpace` 更大，應限定在專用儲存池。依據：[PVE 刪除 API](https://github.com/proxmox/pve-storage/blob/master/src/PVE/API2/Storage/Content.pm)、[PVE 工作狀態 API](https://github.com/proxmox/pve-manager/blob/master/PVE/API2/Tasks.pm)、[CSI DeleteVolume](https://github.com/container-storage-interface/spec/blob/v1.13.0/spec.md#deletevolume)。
+
 ## 啟動
 
 | 環境變數 | 用途 |
@@ -55,4 +72,4 @@ rtk proxy env GOTOOLCHAIN=go1.27.2 go build -o /tmp/pve-csi ./cmd/pve-csi
 rtk proxy /tmp/pve-csi controller
 ```
 
-正式程式只有 `controller` 指令。建碟要求透過 CSI gRPC 傳入。
+正式程式只有 `controller` 指令。建碟與刪碟要求透過 CSI gRPC 傳入。

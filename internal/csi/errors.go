@@ -48,7 +48,7 @@ func csiBackendError(err error) error {
 	case errors.Is(err, context.DeadlineExceeded):
 		return stepStatus(err, codes.DeadlineExceeded, "volume request deadline exceeded; retry with the same name and configuration")
 	case errors.Is(err, volume.ErrBusy):
-		return stepStatus(err, codes.Aborted, "a CreateVolume request for this name is already in progress; retry")
+		return stepStatus(err, codes.Aborted, "another volume operation is in progress; wait and retry")
 	case errors.Is(err, domain.ErrConflict):
 		return stepStatus(err, codes.AlreadyExists, "an incompatible volume already exists for this name")
 	case errors.Is(err, domain.ErrCapacity):
@@ -67,6 +67,29 @@ func csiBackendError(err error) error {
 	}
 	// Backend error messages may carry transport details or untrusted data.
 	return stepStatus(err, codes.Internal, "volume backend operation failed")
+}
+
+func csiDeleteError(err error) error {
+	switch {
+	case errors.Is(err, volume.ErrDeleteUnconfirmed):
+		message := "deletion outcome is unknown; PVE may still be deleting the disk; retry DeleteVolume with the same volume_id"
+		var backendErr *volume.BackendError
+		if errors.As(err, &backendErr) {
+			_, detail := backendFailure(backendErr)
+			message += "; " + detail
+		}
+		return stepStatus(err, codes.Unavailable, message)
+	case errors.Is(err, domain.ErrInvalidHandle):
+		return stepStatus(err, codes.InvalidArgument, "invalid v1 volume ID; deletion refused")
+	case errors.Is(err, domain.ErrConflict):
+		return stepStatus(err, codes.FailedPrecondition, "disk metadata does not match the requested volume; deletion refused")
+	case errors.Is(err, volume.ErrOwnerInUse):
+		return stepStatus(err, codes.FailedPrecondition, "owner VMID belongs to a VM or container; this driver only deletes disks under a reserved unused owner")
+	case errors.Is(err, volume.ErrDeleteFailed):
+		return stepStatus(err, codes.FailedPrecondition, "PVE deletion task failed; inspect Tasks in PVE before retrying")
+	default:
+		return csiBackendError(err)
+	}
 }
 
 func backendFailure(err *volume.BackendError) (codes.Code, string) {

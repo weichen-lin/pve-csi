@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"pve-csi.local/csi-plugin/internal/domain"
+	"pve-csi.local/csi-plugin/internal/volume"
 )
 
 type Config struct {
@@ -62,13 +63,37 @@ func (c *Controller) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequ
 }
 
 func (c *Controller) ControllerGetCapabilities(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
-	// Advertise CREATE_DELETE_VOLUME only after DeleteVolume is implemented.
-	return &csi.ControllerGetCapabilitiesResponse{}, nil
+	return &csi.ControllerGetCapabilitiesResponse{Capabilities: []*csi.ControllerServiceCapability{{
+		Type: &csi.ControllerServiceCapability_Rpc{Rpc: &csi.ControllerServiceCapability_RPC{
+			Type: csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+		}},
+	}}}, nil
+}
+
+func (c *Controller) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, csiDeleteError(err)
+	}
+	if req == nil || req.VolumeId == "" || len(req.Secrets) != 0 {
+		return nil, status.Error(codes.InvalidArgument, "[validate_delete_request] volume_id is required; per-request secrets are not supported")
+	}
+	id, err := domain.ParseHandle(req.VolumeId)
+	if err != nil {
+		return nil, csiDeleteError(volume.AtStep("validate_delete_request", "volume", err))
+	}
+	if id.Placement().Node != c.cfg.Node || id.OwnerVMID() != c.cfg.OwnerVMID {
+		return nil, status.Error(codes.FailedPrecondition, "[validate_delete_scope] volume is outside the configured PVE_NODE or PVE_OWNER_VMID; deletion refused")
+	}
+	if err := c.allocator.DeleteVolume(ctx, id); err != nil {
+		return nil, csiDeleteError(err)
+	}
+	return &csi.DeleteVolumeResponse{}, nil
 }
 
 // Contracts consumed by CSI; implemented by the volume application services.
 type Provisioner interface {
 	EnsureVolume(context.Context, domain.Request) (domain.Volume, error)
+	DeleteVolume(context.Context, domain.Identity) error
 }
 type VolumeReader interface {
 	GetVolume(context.Context, domain.Identity) (domain.Volume, error)

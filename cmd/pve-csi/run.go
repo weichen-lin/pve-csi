@@ -79,4 +79,4 @@ func serveController(ctx context.Context, out io.Writer, endpoint string, cfg cs
 	return csidriver.Serve(ctx, endpoint, server, out)
 }
 
-const Version = "dev-005"
+const Version = "dev-006"

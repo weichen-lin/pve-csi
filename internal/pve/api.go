@@ -2,8 +2,10 @@ package pve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -83,6 +85,89 @@ func (c *Client) AllocateImage(ctx context.Context, node, storage, filename stri
 	var reference string
 	err := c.postData(ctx, path, form, &reference)
 	return reference, err
+}
+
+// No delay parameter: PVE returns a task ID, which must be observed to finish.
+func (c *Client) DeleteImage(ctx context.Context, node, storage, reference string) (string, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/storage/%s/content/%s", url.PathEscape(node), url.PathEscape(storage), url.PathEscape(reference))
+	var upid string
+	err := c.requestData(ctx, http.MethodDelete, path, nil, &upid)
+	return upid, err
+}
+
+type DeletionTask struct {
+	UPID       string `json:"upid"`
+	Type       string `json:"type"`
+	ID         string `json:"id"`
+	Status     string `json:"status"`
+	ExitStatus string `json:"exitstatus"`
+}
+
+func validDeletionTask(upid, node, id string) bool {
+	parts := strings.Split(upid, ":")
+	return len(parts) == 9 && parts[0] == "UPID" && parts[1] == node &&
+		parts[5] == "imgdel" && parts[6] == id && parts[7] != "" && parts[8] == ""
+}
+
+func (c *Client) DeletionStatus(ctx context.Context, node, upid, id string) (DeletionTask, error) {
+	if !validDeletionTask(upid, node, id) {
+		return DeletionTask{}, errors.New("PVE returned an unexpected deletion task ID")
+	}
+	path := fmt.Sprintf("/api2/json/nodes/%s/tasks/%s/status", url.PathEscape(node), url.PathEscape(upid))
+	var task DeletionTask
+	if err := c.getData(ctx, path, &task); err != nil {
+		return task, err
+	}
+	if task.UPID != upid || task.Type != "imgdel" || task.ID != id ||
+		(task.Status != "running" && task.Status != "stopped") || (task.Status == "stopped" && task.ExitStatus == "") {
+		return DeletionTask{}, errors.New("PVE returned an invalid deletion task status")
+	}
+	return task, nil
+}
+
+// PVE task IDs identify owner@storage, not an individual disk. Conservatively
+// block the whole owner/storage scope while a visible deletion is running.
+func (c *Client) HasActiveDeletion(ctx context.Context, node, id string) (bool, error) {
+	for start := 0; ; start += 100 {
+		query := url.Values{"source": {"active"}, "typefilter": {"imgdel"}, "limit": {"100"}, "start": {strconv.Itoa(start)}}
+		var tasks []DeletionTask
+		path := fmt.Sprintf("/api2/json/nodes/%s/tasks?%s", url.PathEscape(node), query.Encode())
+		if err := c.getData(ctx, path, &tasks); err != nil {
+			return false, err
+		}
+		for _, task := range tasks {
+			if task.Type != "imgdel" || task.ID == "" || task.Status == "" {
+				return false, errors.New("PVE returned an invalid active deletion task")
+			}
+			if task.ID == id && task.Status == "RUNNING" {
+				return true, nil
+			}
+		}
+		if len(tasks) < 100 {
+			return false, nil
+		}
+	}
+}
+
+// This provisioning-only driver uses a reserved owner VMID with no VM/CT.
+func (c *Client) OwnerUnused(ctx context.Context, owner int) (bool, error) {
+	if owner < 100 || owner > 999999999 {
+		return false, errors.New("invalid owner VMID")
+	}
+	var next json.Number
+	err := c.getData(ctx, "/api2/json/cluster/nextid?vmid="+strconv.Itoa(owner), &next)
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusBadRequest {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	id, err := next.Int64()
+	if err != nil || id != int64(owner) {
+		return false, errors.New("PVE returned an unexpected owner VMID")
+	}
+	return true, nil
 }
 
 var storageIDPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]*$`)

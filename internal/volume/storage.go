@@ -42,9 +42,12 @@ func (s PoolState) CheckAllocationPermission() error {
 }
 
 var (
-	ErrNotFound    = errors.New("volume not found in the configured scope")
-	ErrUnconfirmed = errors.New("volume allocation outcome unconfirmed")
-	ErrBusy        = errors.New("a CreateVolume request for this name is already in progress; retry")
+	ErrNotFound          = errors.New("volume not found in the configured scope")
+	ErrUnconfirmed       = errors.New("volume allocation outcome unconfirmed")
+	ErrBusy              = errors.New("another volume operation is in progress; retry")
+	ErrDeleteUnconfirmed = errors.New("volume deletion outcome unconfirmed")
+	ErrDeleteFailed      = errors.New("PVE deletion task failed")
+	ErrOwnerInUse        = errors.New("reserved disk owner VMID is used by a VM or container")
 )
 
 type FailureKind int

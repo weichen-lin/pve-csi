@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"pve-csi.local/csi-plugin/internal/domain"
 	"pve-csi.local/csi-plugin/internal/volume"
@@ -136,6 +137,75 @@ func (g *StorageGateway) lookup(ctx context.Context, placement domain.Placement,
 func (g *StorageGateway) Allocate(ctx context.Context, req domain.Request) (volume.AllocationReceipt, error) {
 	reference, err := g.client.AllocateImage(ctx, req.Node, req.Storage, req.Filename(), req.OwnerVMID, req.CapacityBytes)
 	return volume.AllocationReceipt{Reference: reference}, mapError(err)
+}
+
+func (g *StorageGateway) CheckIdle(ctx context.Context, placement domain.Placement, owner int) error {
+	target := strconv.Itoa(owner) + "@" + placement.Storage
+	active, err := g.client.HasActiveDeletion(ctx, placement.Node, target)
+	if err != nil {
+		return volume.AtStep("check_pending_deletion", target, mapError(err))
+	}
+	if active {
+		return volume.AtStep("check_pending_deletion", target, volume.ErrBusy)
+	}
+	return nil
+}
+
+func (g *StorageGateway) CheckDeletion(ctx context.Context, id domain.Identity) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	path := "/storage/" + id.Placement().Storage
+	permissions, err := g.client.StoragePermissions(ctx, id.Placement().Storage)
+	if err != nil {
+		return volume.AtStep("check_deletion_permission", path, mapError(err))
+	}
+	if !permissions.Allocate {
+		return volume.AtStep("check_deletion_permission", path, missingPrivilege(path, "Datastore.Allocate"))
+	}
+	unused, err := g.client.OwnerUnused(ctx, id.OwnerVMID())
+	path = "/vms/" + strconv.Itoa(id.OwnerVMID())
+	if err != nil {
+		return volume.AtStep("check_deletion_owner", path, mapError(err))
+	}
+	if !unused {
+		return volume.AtStep("check_deletion_owner", path, volume.ErrOwnerInUse)
+	}
+	return nil
+}
+
+func (g *StorageGateway) Delete(ctx context.Context, id domain.Identity) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	placement := id.Placement()
+	upid, err := g.client.DeleteImage(ctx, placement.Node, placement.Storage, id.Reference())
+	if err != nil {
+		return volume.AtStep("delete_volume", id.Reference(), mapError(err))
+	}
+	// A caller without a deadline must not keep a local operation locked forever.
+	taskCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	taskID := strconv.Itoa(id.OwnerVMID()) + "@" + placement.Storage
+	for {
+		task, err := g.client.DeletionStatus(taskCtx, placement.Node, upid, taskID)
+		if err != nil {
+			return volume.AtStep("wait_deletion_task", id.Reference(), errors.Join(volume.ErrDeleteUnconfirmed, mapError(err)))
+		}
+		if task.Status == "stopped" {
+			if task.ExitStatus != "OK" {
+				return volume.AtStep("wait_deletion_task", id.Reference(), volume.ErrDeleteFailed)
+			}
+			return nil
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-taskCtx.Done():
+			timer.Stop()
+			return volume.AtStep("wait_deletion_task", id.Reference(), errors.Join(volume.ErrDeleteUnconfirmed, taskCtx.Err()))
+		case <-timer.C:
+		}
+	}
 }
 
 func mapError(err error) error {
