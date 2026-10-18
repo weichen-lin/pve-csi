@@ -2,17 +2,20 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 
 	csidriver "pve-csi.local/csi-plugin/internal/csi"
+	"pve-csi.local/csi-plugin/internal/domain"
 	"pve-csi.local/csi-plugin/internal/pve"
 )
 
 type Config struct {
 	Connection pve.Config
 	Controller csidriver.Config
+	Scope      domain.Scope
 }
 
 var ownerVMIDPattern = regexp.MustCompile(`^[1-9][0-9]{2,8}$`)
@@ -35,10 +38,13 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	controller := csidriver.Config{
 		DriverName: strings.TrimSpace(getenv("CSI_DRIVER_NAME")),
-		Node:       strings.TrimSpace(getenv("PVE_NODE")), OwnerVMID: vmid,
 	}
 	if err := controller.Validate(); err != nil {
 		return Config{}, err
 	}
-	return Config{Connection: connection, Controller: controller}, nil
+	scope := domain.Scope{Node: strings.TrimSpace(getenv("PVE_NODE")), OwnerVMID: vmid}
+	if err := scope.Validate(); err != nil {
+		return Config{}, fmt.Errorf("invalid PVE_NODE or PVE_OWNER_VMID: %w", err)
+	}
+	return Config{Connection: connection, Controller: controller, Scope: scope}, nil
 }

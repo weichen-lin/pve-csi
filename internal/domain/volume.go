@@ -25,8 +25,8 @@ type Placement struct {
 	Storage string
 }
 
-// Allocation is an observation supplied by a gateway. Only Confirm can turn it
-// into a Volume; untrusted metadata must not bypass the compatibility checks.
+// Allocation is a backend observation. Confirm or Restore validates it before
+// constructing a Volume.
 type Allocation struct {
 	Reference     string
 	Placement     Placement
@@ -59,11 +59,6 @@ func (v Volume) OwnerVMID() int        { return v.allocation.OwnerVMID }
 func (v Volume) CapacityBytes() int64  { return v.allocation.CapacityBytes }
 func (r Request) Placement() Placement { return Placement{Node: r.Node, Storage: r.Storage} }
 
-func (v Volume) CompatibleWith(req Request) bool {
-	confirmed, err := Confirm(req, v.allocation)
-	return err == nil && v.id == confirmed.id
-}
-
 func (r Request) CapacityLimit() int64 {
 	if r.CapacityLimitBytes == 0 {
 		return r.CapacityBytes
@@ -75,14 +70,14 @@ func (r Request) Validate() error {
 	if r.Name == "" || len(r.Name) > 128 || strings.TrimSpace(r.Name) != r.Name || strings.ContainsFunc(r.Name, unicode.IsControl) {
 		return errors.New("volume name must be 1 to 128 bytes without control characters or surrounding whitespace")
 	}
-	if !ValidNodeName(r.Node) {
-		return errors.New("volume allocation requires a valid PVE node name")
+	if err := (Scope{Node: r.Node, OwnerVMID: r.OwnerVMID}).Validate(); err != nil {
+		return err
 	}
 	if !ValidStorageID(r.Storage) {
 		return errors.New("volume allocation requires a valid PVE storage ID")
 	}
-	if r.OwnerVMID < 100 || r.OwnerVMID > 999999999 {
-		return errors.New("volume owner VMID must be from 100 to 999999999")
+	if _, err := ParseHandle(r.Handle()); err != nil {
+		return err
 	}
 	if r.CapacityBytes <= 0 || r.CapacityBytes%GiB != 0 {
 		return errors.New("volume capacity must be a positive whole number of GiB")

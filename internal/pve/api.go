@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
+
+	"pve-csi.local/csi-plugin/internal/domain"
 )
 
 type StorageInfo struct {
@@ -170,8 +171,6 @@ func (c *Client) OwnerUnused(ctx context.Context, owner int) (bool, error) {
 	return true, nil
 }
 
-var storageIDPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]*$`)
-
 // StoragePermissions describes the authenticated token's effective privileges,
 // including the restrictions imposed by its backing user and privilege separation.
 type StoragePermissions struct {
@@ -181,7 +180,7 @@ type StoragePermissions struct {
 }
 
 func (c *Client) StoragePermissions(ctx context.Context, storageID string) (StoragePermissions, error) {
-	if !storageIDPattern.MatchString(storageID) {
+	if !domain.ValidStorageID(storageID) {
 		return StoragePermissions{}, errors.New("permissions query requires a valid storage ID")
 	}
 	path := "/storage/" + storageID

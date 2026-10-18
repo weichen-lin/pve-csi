@@ -33,12 +33,9 @@ func (c *Controller) ValidateVolumeCapabilities(ctx context.Context, req *csi.Va
 			return nil, status.Error(codes.InvalidArgument, "each capability requires an access type and access mode")
 		}
 	}
-	volume, err := c.reader.GetVolume(ctx, id)
+	_, err = c.service.GetVolume(ctx, id)
 	if err != nil {
 		return nil, csiReadError(err)
-	}
-	if volume.ID() != id.ID() || volume.Reference() != id.Reference() || volume.Placement() != id.Placement() || volume.OwnerVMID() != id.OwnerVMID() || volume.CapacityBytes() < domain.GiB {
-		return nil, status.Error(codes.Internal, "reader returned an inconsistent volume")
 	}
 	unsupported := func() (*csi.ValidateVolumeCapabilitiesResponse, error) {
 		return &csi.ValidateVolumeCapabilitiesResponse{Message: "requested capabilities or parameters are not supported"}, nil

@@ -38,16 +38,25 @@ func (r Request) Handle() string {
 	return "v1:" + r.Node + ":" + r.Storage + ":" + r.Filename()
 }
 
-// ValidateOwnerScope checks controller placement without inventing a volume request.
-func ValidateOwnerScope(node string, owner int) error {
-	if !ValidNodeName(node) {
+// Scope identifies the node and reserved disk owner managed by one service.
+type Scope struct {
+	Node      string
+	OwnerVMID int
+}
+
+func (s Scope) Contains(placement Placement, owner int) bool {
+	return placement.Node == s.Node && owner == s.OwnerVMID
+}
+
+func (s Scope) Validate() error {
+	if !ValidNodeName(s.Node) {
 		return errors.New("invalid PVE node name")
 	}
-	if owner < 100 || owner > 999999999 {
+	if s.OwnerVMID < 100 || s.OwnerVMID > 999999999 {
 		return errors.New("owner VMID must be from 100 to 999999999")
 	}
 	// v1:<node>:<storage>:vm-<owner>-csi-<sha256>; shortest storage ID is 2 bytes.
-	if len("v1:::")+len(node)+2+len("vm--csi-")+len(strconv.Itoa(owner))+64 > 128 {
+	if len("v1:::")+len(s.Node)+2+len("vm--csi-")+len(strconv.Itoa(s.OwnerVMID))+64 > 128 {
 		return errors.New("node and owner cannot produce a volume handle within 128 bytes")
 	}
 	return nil

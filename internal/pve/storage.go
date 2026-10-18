@@ -18,7 +18,6 @@ import (
 type StorageGateway struct{ client *Client }
 
 var _ volume.StorageGateway = (*StorageGateway)(nil)
-var _ volume.ReadGateway = (*StorageGateway)(nil)
 
 func NewStorageGateway(client *Client) (*StorageGateway, error) {
 	if client == nil {
@@ -87,10 +86,6 @@ func (g *StorageGateway) checkReadAccess(ctx context.Context, placement domain.P
 	return permissions, nil
 }
 
-func (g *StorageGateway) Lookup(ctx context.Context, req domain.Request) (domain.Allocation, bool, error) {
-	return g.lookup(ctx, req.Placement(), req.OwnerVMID, req.AllocationReference())
-}
-
 func (g *StorageGateway) LookupVolume(ctx context.Context, id domain.Identity) (domain.Allocation, bool, error) {
 	if err := id.Validate(); err != nil {
 		return domain.Allocation{}, false, err
@@ -134,9 +129,9 @@ func (g *StorageGateway) lookup(ctx context.Context, placement domain.Placement,
 	}, true, nil
 }
 
-func (g *StorageGateway) Allocate(ctx context.Context, req domain.Request) (volume.AllocationReceipt, error) {
+func (g *StorageGateway) Allocate(ctx context.Context, req domain.Request) (string, error) {
 	reference, err := g.client.AllocateImage(ctx, req.Node, req.Storage, req.Filename(), req.OwnerVMID, req.CapacityBytes)
-	return volume.AllocationReceipt{Reference: reference}, mapError(err)
+	return reference, mapError(err)
 }
 
 func (g *StorageGateway) CheckIdle(ctx context.Context, placement domain.Placement, owner int) error {

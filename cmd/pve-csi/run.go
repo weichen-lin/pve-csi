@@ -50,24 +50,20 @@ func runController(ctx context.Context, out io.Writer, getenv func(string) strin
 		return err
 	}
 	defer client.Close()
-	return serveController(ctx, out, endpoint, cfg.Controller, client)
+	return serveController(ctx, out, endpoint, cfg, client)
 }
 
-func serveController(ctx context.Context, out io.Writer, endpoint string, cfg csidriver.Config, client *pve.Client) error {
+func serveController(ctx context.Context, out io.Writer, endpoint string, cfg Config, client *pve.Client) error {
 	server := grpc.NewServer()
 	gateway, err := pve.NewStorageGateway(client)
 	if err != nil {
 		return err
 	}
-	service, err := volume.NewService(gateway)
+	service, err := volume.NewService(gateway, cfg.Scope)
 	if err != nil {
 		return err
 	}
-	reader, err := volume.NewReader(gateway, cfg.Node, cfg.OwnerVMID)
-	if err != nil {
-		return err
-	}
-	controller, err := csidriver.NewController(cfg, service, reader)
+	controller, err := csidriver.NewController(cfg.Controller, service)
 	if err != nil {
 		return err
 	}

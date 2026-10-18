@@ -19,8 +19,6 @@ import (
 
 type Config struct {
 	DriverName string
-	Node       string
-	OwnerVMID  int
 }
 
 var dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
@@ -42,9 +40,6 @@ func (cfg Config) Validate() error {
 	if !validDNSName(cfg.DriverName) {
 		return errors.New("CSI_DRIVER_NAME is required and must be a lowercase DNS name of at most 63 bytes")
 	}
-	if err := domain.ValidateOwnerScope(cfg.Node, cfg.OwnerVMID); err != nil {
-		return fmt.Errorf("invalid PVE_NODE or PVE_OWNER_VMID: %w", err)
-	}
 	return nil
 }
 
@@ -52,22 +47,18 @@ func (cfg Config) TopologyKey() string { return cfg.DriverName + "/pve-node" }
 
 type Controller struct {
 	csi.UnimplementedControllerServer
-	cfg       Config
-	allocator Provisioner
-	reader    VolumeReader
+	cfg     Config
+	service *volume.Service
 }
 
-func NewController(cfg Config, allocator Provisioner, reader VolumeReader) (*Controller, error) {
-	if allocator == nil {
-		return nil, errors.New("CSI controller requires a volume allocator")
-	}
-	if reader == nil {
-		return nil, errors.New("CSI controller requires a volume reader")
+func NewController(cfg Config, service *volume.Service) (*Controller, error) {
+	if service == nil {
+		return nil, errors.New("CSI controller requires a volume service")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid CSI controller configuration: %w", err)
 	}
-	return &Controller{cfg: cfg, allocator: allocator, reader: reader}, nil
+	return &Controller{cfg: cfg, service: service}, nil
 }
 
 func (c *Controller) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
@@ -78,12 +69,9 @@ func (c *Controller) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequ
 	if err != nil {
 		return nil, status.Errorf(status.Code(err), "[validate_request] %s", status.Convert(err).Message())
 	}
-	volume, err := c.allocator.EnsureVolume(ctx, backendReq)
+	volume, err := c.service.EnsureVolume(ctx, backendReq)
 	if err != nil {
 		return nil, csiBackendError(err)
-	}
-	if !volume.CompatibleWith(backendReq) {
-		return nil, status.Error(codes.Internal, "allocator returned an inconsistent volume")
 	}
 	return &csi.CreateVolumeResponse{Volume: &csi.Volume{
 		VolumeId: volume.ID(), CapacityBytes: volume.CapacityBytes(),
@@ -110,22 +98,10 @@ func (c *Controller) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequ
 	if err != nil {
 		return nil, csiDeleteError(volume.AtStep("validate_delete_request", "volume", err))
 	}
-	if id.Placement().Node != c.cfg.Node || id.OwnerVMID() != c.cfg.OwnerVMID {
-		return nil, status.Error(codes.FailedPrecondition, "[validate_delete_scope] volume is outside the configured PVE_NODE or PVE_OWNER_VMID; deletion refused")
-	}
-	if err := c.allocator.DeleteVolume(ctx, id); err != nil {
+	if err := c.service.DeleteVolume(ctx, id); err != nil {
 		return nil, csiDeleteError(err)
 	}
 	return &csi.DeleteVolumeResponse{}, nil
-}
-
-// Contracts consumed by CSI; implemented by the volume application services.
-type Provisioner interface {
-	EnsureVolume(context.Context, domain.Request) (domain.Volume, error)
-	DeleteVolume(context.Context, domain.Identity) error
-}
-type VolumeReader interface {
-	GetVolume(context.Context, domain.Identity) (domain.Volume, error)
 }
 
 func (c *Controller) volumeRequest(req *csi.CreateVolumeRequest) (domain.Request, error) {
@@ -167,13 +143,13 @@ func (c *Controller) volumeRequest(req *csi.CreateVolumeRequest) (domain.Request
 	// Preserve every original byte (including allowed whitespace) while passing
 	// a safe name to the stricter backend. Keep this namespace stable on retry.
 	backendReq := domain.Request{
-		Name: domain.ProvisioningName(req.Name), Node: c.cfg.Node, Storage: storage,
-		OwnerVMID: c.cfg.OwnerVMID, CapacityBytes: capacity, CapacityLimitBytes: limit,
+		Name: domain.ProvisioningName(req.Name), Node: c.service.Scope().Node, Storage: storage,
+		OwnerVMID: c.service.Scope().OwnerVMID, CapacityBytes: capacity, CapacityLimitBytes: limit,
 	}
 	// A selected pool must produce a handle that subsequent reads can parse.
 	// Reject an oversized handle before any backend operation, not after POST.
-	if _, err := domain.ParseHandle(backendReq.Handle()); err != nil {
-		return invalid("node, storage and owner produce an invalid volume ID or exceed its 128-byte limit")
+	if err := backendReq.Validate(); err != nil {
+		return invalid(err.Error())
 	}
 	return backendReq, nil
 }
@@ -208,7 +184,7 @@ func (c *Controller) validateTopology(requirements *csi.TopologyRequirement) err
 	// Preferred is advisory. An empty requisite list imposes no restriction.
 	if len(requirements.Requisite) != 0 {
 		for _, topology := range requirements.Requisite {
-			if topology.Segments[c.cfg.TopologyKey()] == c.cfg.Node {
+			if topology.Segments[c.cfg.TopologyKey()] == c.service.Scope().Node {
 				return nil
 			}
 		}

@@ -12,20 +12,29 @@ import (
 // Service owns one in-flight guard per controller instance.
 type Service struct {
 	storage  StorageGateway
+	scope    domain.Scope
 	mu       sync.Mutex
 	inFlight map[string]struct{}
 }
 
-func NewService(storage StorageGateway) (*Service, error) {
+func NewService(storage StorageGateway, scope domain.Scope) (*Service, error) {
 	if storage == nil {
 		return nil, errors.New("provisioning requires a storage gateway")
 	}
-	return &Service{storage: storage, inFlight: make(map[string]struct{})}, nil
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	return &Service{storage: storage, scope: scope, inFlight: make(map[string]struct{})}, nil
 }
+
+func (s *Service) Scope() domain.Scope { return s.scope }
 
 func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.Volume, error) {
 	if err := req.Validate(); err != nil {
 		return domain.Volume{}, AtStep("validate_request", "volume", err)
+	}
+	if !s.scope.Contains(req.Placement(), req.OwnerVMID) {
+		return domain.Volume{}, AtStep("validate_request_scope", "volume", ErrOutsideScope)
 	}
 	if err := ctx.Err(); err != nil {
 		return domain.Volume{}, err
@@ -57,8 +66,8 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 	if err := pool.Pool.CheckCapacity(req.CapacityBytes); err != nil {
 		return domain.Volume{}, AtStep("check_capacity", target, err)
 	}
-	receipt, postErr := s.storage.Allocate(ctx, req)
-	unexpectedID := postErr == nil && receipt.Reference != req.AllocationReference()
+	reference, postErr := s.storage.Allocate(ctx, req)
+	unexpectedID := postErr == nil && reference != req.AllocationReference()
 	if unexpectedID {
 		postErr = errors.New("PVE allocation returned an unexpected volume ID")
 	}
@@ -97,7 +106,11 @@ func (s *Service) release(id string) {
 }
 
 func (s *Service) observe(ctx context.Context, req domain.Request) (domain.Volume, bool, error) {
-	allocation, found, err := s.storage.Lookup(ctx, req)
+	id, err := domain.ParseHandle(req.Handle())
+	if err != nil {
+		return domain.Volume{}, false, err
+	}
+	allocation, found, err := s.storage.LookupVolume(ctx, id)
 	if err != nil || !found {
 		return domain.Volume{}, false, err
 	}
@@ -105,15 +118,33 @@ func (s *Service) observe(ctx context.Context, req domain.Request) (domain.Volum
 	return volume, err == nil, err
 }
 
-type AllocationReceipt struct{ Reference string }
-
-// StorageGateway is owned by this use case. Lookup false means not observed;
-// permission filtering or a remote write can still hide an existing allocation.
-type StorageGateway interface {
-	ReadGateway
-	CheckIdle(context.Context, domain.Placement, int) error
-	Lookup(context.Context, domain.Request) (domain.Allocation, bool, error)
-	Allocate(context.Context, domain.Request) (AllocationReceipt, error)
-	CheckDeletion(context.Context, domain.Identity) error
-	Delete(context.Context, domain.Identity) error
+func (s *Service) GetVolume(ctx context.Context, id domain.Identity) (domain.Volume, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.Volume{}, err
+	}
+	if err := id.Validate(); err != nil {
+		return domain.Volume{}, err
+	}
+	if !s.scope.Contains(id.Placement(), id.OwnerVMID()) {
+		return domain.Volume{}, ErrNotFound
+	}
+	target := id.Placement().Node + "/" + id.Placement().Storage
+	pool, err := s.storage.InspectPool(ctx, id.Placement(), id.OwnerVMID())
+	if err != nil {
+		return domain.Volume{}, err
+	}
+	if err := pool.CheckReadable(); err != nil {
+		return domain.Volume{}, AtStep("check_storage_status", target, err)
+	}
+	observed, found, err := s.storage.LookupVolume(ctx, id)
+	if err != nil {
+		return domain.Volume{}, AtStep("lookup_volume", target, err)
+	}
+	if !found {
+		// Permission filtering can also hide volumes. This is not evidence
+		// that deletion occurred or permission to allocate another volume.
+		return domain.Volume{}, AtStep("lookup_volume", target, ErrNotFound)
+	}
+	result, err := domain.Restore(id, observed)
+	return result, AtStep("lookup_volume", target, err)
 }

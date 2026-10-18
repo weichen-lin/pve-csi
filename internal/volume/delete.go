@@ -11,6 +11,9 @@ func (s *Service) DeleteVolume(ctx context.Context, id domain.Identity) error {
 	if err := id.Validate(); err != nil {
 		return AtStep("validate_delete_request", "volume", err)
 	}
+	if !s.scope.Contains(id.Placement(), id.OwnerVMID()) {
+		return AtStep("validate_delete_scope", "volume", ErrOutsideScope)
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

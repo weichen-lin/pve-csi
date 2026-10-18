@@ -1,11 +1,23 @@
 package volume
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
 	"pve-csi.local/csi-plugin/internal/domain"
 )
+
+// StorageGateway is the application's port to storage. A missing observation
+// must be distinguished from a lookup failure or an uncertain write.
+type StorageGateway interface {
+	InspectPool(context.Context, domain.Placement, int) (PoolState, error)
+	LookupVolume(context.Context, domain.Identity) (domain.Allocation, bool, error)
+	CheckIdle(context.Context, domain.Placement, int) error
+	Allocate(context.Context, domain.Request) (string, error)
+	CheckDeletion(context.Context, domain.Identity) error
+	Delete(context.Context, domain.Identity) error
+}
 
 // StorageAccess contains effective capabilities for the requested pool, not
 // PVE role names or ACLs. Authorization is an application policy.
@@ -42,6 +54,7 @@ func (s PoolState) CheckAllocationPermission() error {
 }
 
 var (
+	ErrOutsideScope      = errors.New("volume is outside the configured node or owner")
 	ErrNotFound          = errors.New("volume not found in the configured scope")
 	ErrUnconfirmed       = errors.New("volume allocation outcome unconfirmed")
 	ErrBusy              = errors.New("another volume operation is in progress; retry")

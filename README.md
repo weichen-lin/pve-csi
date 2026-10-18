@@ -12,7 +12,7 @@
 | `internal/csi` | CSI gRPC 服務、請求驗證與錯誤轉換 |
 | `internal/pve` | HTTPS client、PVE API 與儲存介面實作 |
 
-`volume` 只依賴 `domain`；`csi`、`pve` 接到 `volume` 的介面。`domain` 不依賴 CSI 或 PVE。
+`csi` 呼叫同一個 `volume.Service` 處理建碟、查詢與刪碟；Service 統一檢查 node／owner 範圍，再透過 `StorageGateway` 呼叫 PVE。`volume` 只依賴 `domain`，`pve` 實作儲存介面；`domain` 不依賴 CSI 或 PVE。
 
 儲存池由每筆 CSI 請求的 `parameters.storage` 指定；磁碟歸屬編號讀取 `PVE_OWNER_VMID`。
 

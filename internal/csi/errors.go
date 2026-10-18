@@ -49,6 +49,8 @@ func csiBackendError(err error) error {
 		return stepStatus(err, codes.DeadlineExceeded, "volume request deadline exceeded; retry with the same name and configuration")
 	case errors.Is(err, volume.ErrBusy):
 		return stepStatus(err, codes.Aborted, "another volume operation is in progress; wait and retry")
+	case errors.Is(err, volume.ErrOutsideScope):
+		return stepStatus(err, codes.FailedPrecondition, "volume is outside the configured PVE_NODE or PVE_OWNER_VMID; operation refused")
 	case errors.Is(err, domain.ErrConflict):
 		return stepStatus(err, codes.AlreadyExists, "an incompatible volume already exists for this name")
 	case errors.Is(err, domain.ErrCapacity):
