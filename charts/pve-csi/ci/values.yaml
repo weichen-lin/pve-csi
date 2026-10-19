@@ -1,0 +1,10 @@
+# Offline lint/render fixture. These are not home-lab credentials or settings.
+image:
+  tag: ci
+pve:
+  endpoint: https://pve.example.test:8006
+  node: example-pve
+  ownerVMID: 9000
+  existingSecret: example-pve-token
+storageClass:
+  storage: example-lvm

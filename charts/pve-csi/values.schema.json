@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["driverName", "image", "pve", "storageClass", "nodeSelector"],
+  "properties": {
+    "driverName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "pullPolicy"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string", "pattern": "^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$"},
+        "pullPolicy": {"type": "string", "enum": ["IfNotPresent", "Always"]}
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {"name": {"$ref": "#/definitions/resourceName"}}
+      }
+    },
+    "pve": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint", "node", "ownerVMID", "existingSecret", "caConfigMap"],
+      "properties": {
+        "endpoint": {"type": "string", "pattern": "^https://[^\\s]+$"},
+        "node": {
+          "description": "PVE host name: 1-63 letters, digits or hyphens; start and end with a letter or digit.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 63,
+          "pattern": "^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$"
+        },
+        "ownerVMID": {"type": "integer", "minimum": 100, "maximum": 999999999},
+        "existingSecret": {"$ref": "#/definitions/resourceName"},
+        "caConfigMap": {
+          "anyOf": [{"const": ""}, {"$ref": "#/definitions/resourceName"}]
+        }
+      }
+    },
+    "nodeSelector": {
+      "type": "object",
+      "required": ["kubernetes.io/os"],
+      "properties": {"kubernetes.io/os": {"const": "linux"}},
+      "additionalProperties": {"type": "string"}
+    },
+    "tolerations": {"type": "array", "items": {"type": "object"}},
+    "controller": {"$ref": "#/definitions/workload"},
+    "node": {"$ref": "#/definitions/workload"},
+    "sidecars": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attacher", "provisioner", "registrar", "resources"],
+      "properties": {
+        "attacher": {"type": "string", "minLength": 1},
+        "provisioner": {"type": "string", "minLength": 1},
+        "registrar": {"type": "string", "minLength": 1},
+        "resources": {"type": "object"}
+      }
+    },
+    "storageClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["create", "name", "storage", "reclaimPolicy", "volumeBindingMode", "defaultClass"],
+      "properties": {
+        "create": {"type": "boolean"},
+        "name": {"$ref": "#/definitions/resourceName"},
+        "storage": {"type": "string"},
+        "reclaimPolicy": {"type": "string", "enum": ["Delete", "Retain"]},
+        "volumeBindingMode": {"type": "string", "enum": ["Immediate", "WaitForFirstConsumer"]},
+        "defaultClass": {"type": "boolean"}
+      },
+      "if": {"properties": {"create": {"const": true}}},
+      "then": {"properties": {"storage": {"minLength": 1}}}
+    }
+  },
+  "definitions": {
+    "resourceName": {
+      "description": "Kubernetes resource name: 1-253 lowercase letters, digits, hyphens or dots; each dot-separated part must start and end with a letter or digit.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resources"],
+      "properties": {"resources": {"type": "object"}}
+    }
+  }
+}

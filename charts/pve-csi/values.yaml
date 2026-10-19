@@ -1,0 +1,59 @@
+# Example configuration. Replace the image version and PVE settings before deployment.
+# Keep this identity unchanged while its PVs exist. One installation per driver name.
+driverName: pve-csi.local
+
+image:
+  repository: ghcr.io/weichen-lin/pve-csi
+  # Example only. Replace with a Git tag whose image has been published by CI.
+  tag: v0.1.0
+  pullPolicy: IfNotPresent
+# Public images need no login. For private images: [{name: registry-login}].
+imagePullSecrets: []
+
+pve:
+  # Required. Replace with your PVE HTTPS URL; its hostname/IP must match the certificate.
+  endpoint: https://pve.example.com:8006
+  # Required. Replace with the PVE host name shown in the PVE UI, not a Kubernetes node name.
+  node: pve
+  # Required. Reserve an unused number for disk ownership, NOT an existing VM/LXC ID.
+  ownerVMID: 7777
+  # Required. Create this Secret in the release namespace with PVE_TOKEN_ID and PVE_TOKEN_SECRET.
+  existingSecret: pve-csi-pve
+  # Optional. Example: pve-csi-ca (existing ConfigMap with key ca.crt).
+  # Leave empty to use system CA certificates without mounting a custom CA.
+  caConfigMap: ""
+
+# All selected nodes must be VMs on pve.node. Current CI publishes amd64 images.
+nodeSelector:
+  kubernetes.io/os: linux
+  kubernetes.io/arch: amd64
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+controller:
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {memory: 128Mi}
+node:
+  resources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {memory: 64Mi}
+
+sidecars:
+  attacher: registry.k8s.io/sig-storage/csi-attacher:v4.13.0
+  provisioner: registry.k8s.io/sig-storage/csi-provisioner:v6.4.0
+  registrar: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.18.0
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {memory: 128Mi}
+
+storageClass:
+  create: true
+  name: pve-csi
+  # Required when create=true. Replace with your existing PVE storage ID.
+  storage: data-ssd
+  reclaimPolicy: Delete
+  volumeBindingMode: Immediate
+  defaultClass: false

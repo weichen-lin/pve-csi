@@ -53,10 +53,20 @@ jobs:
       - name: Test with race detection
         run: go test -race -count=1 -timeout=5m ./...
 
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Check Helm chart
+        run: |
+          helm lint charts/pve-csi --strict --kube-version 1.34.0 -f charts/pve-csi/ci/values.yaml
+          helm template pve-csi charts/pve-csi --kube-version 1.34.0 -f charts/pve-csi/ci/values.yaml > /dev/null
+          helm template pve-csi charts/pve-csi --kube-version 1.34.0 -f charts/pve-csi/ci/values.yaml \
+            --set pve.caConfigMap=example-pve-ca --set storageClass.create=false > /dev/null
+
   publish:
     name: Publish image
     needs: check
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -74,12 +84,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           revision=$(git rev-parse HEAD)
-          version="$revision"
-          tag="sha-$revision"
-          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
-            version="$GITHUB_REF_NAME"
-            tag="$version"
-          fi
+          tag="$GITHUB_REF_NAME"
           if [[ ! "$tag" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]]; then
             echo 'Git tag must be a valid Docker tag: up to 128 letters, digits, underscores, dots or hyphens; cannot start with a dot or hyphen.'
             exit 1
@@ -87,7 +92,6 @@ jobs:
           {
             echo "name=ghcr.io/${REPOSITORY,,}"
             echo "revision=$revision"
-            echo "version=$version"
             echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v6
@@ -100,12 +104,12 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          build-args: VERSION=${{ steps.image.outputs.version }}
+          build-args: VERSION=${{ steps.image.outputs.tag }}
           tags: pve-csi:ci
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.image.outputs.revision }}
-            org.opencontainers.image.version=${{ steps.image.outputs.version }}
+            org.opencontainers.image.version=${{ steps.image.outputs.tag }}
           load: true
           push: false
           cache-from: type=gha,scope=linux-amd64
@@ -141,11 +145,9 @@ jobs:
           tag="$IMAGE:$IMAGE_TAG"
           docker tag pve-csi:ci "$tag"
           docker push "$tag"
-          reference=$(docker image inspect --format '{{index .RepoDigests 0}}' "$tag")
           {
             printf '### Published image\n\n'
             printf -- '- Commit: `%s`\n' "$REVISION"
             printf -- '- Tag: `%s`\n' "$tag"
-            printf -- '- Deploy by digest: `%s`\n' "$reference"
             printf '\nImage published; no cluster deployment was performed.\n'
           } >> "$GITHUB_STEP_SUMMARY"

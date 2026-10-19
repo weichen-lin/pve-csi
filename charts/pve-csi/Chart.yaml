@@ -1,0 +1,9 @@
+apiVersion: v2
+name: pve-csi
+description: CSI driver for Proxmox VE LVM-thin storage
+type: application
+version: 0.1.0
+kubeVersion: ">=1.34.0-0"
+home: https://github.com/weichen-lin/pve-csi
+sources:
+  - https://github.com/weichen-lin/pve-csi

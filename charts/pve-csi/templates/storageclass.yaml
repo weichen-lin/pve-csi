@@ -1,0 +1,21 @@
+{{- if .Values.storageClass.create }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storageClass.name | quote }}
+  labels:
+    {{- include "pve-csi.labels" . | nindent 4 }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: {{ .Values.storageClass.defaultClass | quote }}
+provisioner: {{ .Values.driverName | quote }}
+parameters:
+  storage: {{ .Values.storageClass.storage | quote }}
+  csi.storage.k8s.io/fstype: ext4
+reclaimPolicy: {{ .Values.storageClass.reclaimPolicy }}
+volumeBindingMode: {{ .Values.storageClass.volumeBindingMode }}
+allowVolumeExpansion: false
+allowedTopologies:
+  - matchLabelExpressions:
+      - key: {{ printf "%s/pve-node" .Values.driverName | quote }}
+        values: [{{ .Values.pve.node | quote }}]
+{{- end }}

@@ -1,0 +1,154 @@
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  labels:
+    {{- include "pve-csi.labels" . | nindent 4 }}
+  name: {{ .Values.driverName | quote }}
+spec:
+  attachRequired: true
+  podInfoOnMount: false
+  volumeLifecycleModes: [Persistent]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    {{- include "pve-csi.labels" . | nindent 4 }}
+  name: {{ .Release.Name }}-node
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name | quote }}
+      app.kubernetes.io/component: node
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+        app.kubernetes.io/component: node
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      securityContext:
+        # product_uuid and kubelet directories are root-owned on the host.
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: csi
+          image: {{ include "pve-csi.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [node, "--endpoint=unix:///csi/csi.sock"]
+          env:
+            - name: CSI_DRIVER_NAME
+              value: {{ .Values.driverName | quote }}
+            - name: PVE_NODE
+              value: {{ .Values.pve.node | quote }}
+          securityContext:
+            # mount(2), block devices and bidirectional propagation require host privileges.
+            privileged: true
+            readOnlyRootFilesystem: true
+          resources:
+            {{- toYaml .Values.node.resources | nindent 12 }}
+          startupProbe:
+            exec:
+              command: [/usr/local/bin/pve-csi, probe, "--endpoint=unix:///csi/csi.sock", --timeout=2s]
+            timeoutSeconds: 3
+            periodSeconds: 5
+            failureThreshold: 12
+          readinessProbe:
+            exec:
+              command: [/usr/local/bin/pve-csi, probe, "--endpoint=unix:///csi/csi.sock", --timeout=2s]
+            timeoutSeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: [/usr/local/bin/pve-csi, probe, "--endpoint=unix:///csi/csi.sock", --timeout=2s]
+            timeoutSeconds: 3
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: socket
+              mountPath: /csi
+            - name: uuid
+              mountPath: /sys/class/dmi/id/product_uuid
+              readOnly: true
+            - name: devices
+              mountPath: /dev
+            - name: kubelet
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            - name: temporary
+              mountPath: /tmp
+        - name: registrar
+          image: {{ .Values.sidecars.registrar | quote }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path=/var/lib/kubelet/plugins/$(CSI_DRIVER_NAME)/csi.sock
+            - --http-endpoint=:9809
+          env:
+            - name: CSI_DRIVER_NAME
+              value: {{ .Values.driverName | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.sidecars.resources | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: 9809
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: socket
+              mountPath: /csi
+            - name: registration
+              mountPath: /registration
+      volumes:
+        - name: devices
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: kubelet
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: temporary
+          emptyDir: {}
+        - name: socket
+          hostPath:
+            path: {{ printf "/var/lib/kubelet/plugins/%s" .Values.driverName | quote }}
+            type: DirectoryOrCreate
+        - name: registration
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: uuid
+          hostPath:
+            path: /sys/class/dmi/id/product_uuid
+            type: File
