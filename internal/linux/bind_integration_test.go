@@ -18,23 +18,25 @@ import (
 	"pve-csi.local/csi-plugin/internal/volume"
 )
 
-func TestNodeStartupMountPrivileges(t *testing.T) {
+func TestNodeStartupWithMountPrivileges(t *testing.T) {
 	before, err := mounts()
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = NewMountGateway("example.csi").CheckStartup(context.Background())
-	if os.Getenv("CSI_EXPECT_MOUNT_DENIED") == "1" {
-		var backend *volume.BackendError
-		if !errors.As(err, &backend) || backend.Kind() != volume.FailurePermissionDenied {
-			t.Fatalf("missing startup permission check: %v", err)
-		}
-	} else if err != nil {
+	if err := NewMountGateway("example.csi").CheckStartup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	after, err := mounts()
 	if err != nil || len(after) != len(before) {
 		t.Fatalf("startup changed mounted filesystems: %v", err)
+	}
+}
+
+func TestNodeStartupWithoutMountPrivileges(t *testing.T) {
+	err := NewMountGateway("example.csi").CheckStartup(context.Background())
+	var backend *volume.BackendError
+	if !errors.As(err, &backend) || backend.Kind() != volume.FailurePermissionDenied {
+		t.Fatalf("missing startup permission check: %v", err)
 	}
 }
 
