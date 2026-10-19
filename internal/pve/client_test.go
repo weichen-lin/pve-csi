@@ -76,7 +76,7 @@ func TestStorageErrorsReachCSI(t *testing.T) {
 				t.Fatalf("HTTP error facts lost: %v", httpErr)
 			}
 			var backendErr *volume.BackendError
-			if !errors.As(mapped, &backendErr) || backendErr.Kind != tt.kind {
+			if !errors.As(mapped, &backendErr) || backendErr.Kind() != tt.kind {
 				t.Fatalf("backend error = %+v, want kind %v", backendErr, tt.kind)
 			}
 			gateway, err := NewStorageGateway(client)
@@ -108,7 +108,7 @@ func TestStorageErrorsReachCSI(t *testing.T) {
 			if tt.missing && !strings.Contains(message, "PVE storage was not found; check the storage parameter in StorageClass") {
 				t.Errorf("missing actionable storage hint: %s", message)
 			}
-			for _, text := range []string{apiErr.Error(), httpErr.Error(), mapped.Error(), backendErr.Hint, csiErr.Error()} {
+			for _, text := range []string{apiErr.Error(), httpErr.Error(), mapped.Error(), backendErr.Hint(), csiErr.Error()} {
 				if strings.Contains(text, secret) {
 					t.Error("response text leaked into an error")
 				}
@@ -123,5 +123,75 @@ func TestUnreadableErrorBodyPreservesHTTPError(t *testing.T) {
 	body := io.MultiReader(strings.NewReader(`{"errors":{"storage":"No such storage."}}`), iotest.ErrReader(errors.New("read failed")))
 	if err := decodeAPIError(httpErr, body); err != httpErr {
 		t.Fatalf("got %v, want original HTTP error", err)
+	}
+}
+
+func TestAllocationAuthorizationStaysInPVEAdapter(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		name := "new allocation rechecks current permission"
+		if existing {
+			name = "existing allocation needs no write permission"
+		}
+		t.Run(name, func(t *testing.T) {
+			req := domain.Request{Name: domain.ProvisioningName("retry"), Node: "pve", Storage: "pool", OwnerVMID: 7777, CapacityBytes: domain.GiB}
+			permissionReads, writes := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					writes++
+					t.Errorf("unexpected write: %s", r.Method)
+					w.WriteHeader(500)
+					return
+				}
+				switch r.URL.Path {
+				case "/api2/json/access/permissions":
+					permissionReads++
+					// New allocation initially has permission; it is revoked before
+					// the application reaches the explicit write permission check.
+					if !existing && permissionReads < 3 {
+						io.WriteString(w, `{"data":{"/storage/pool":{"Datastore.Audit":1,"Datastore.Allocate":1,"Datastore.AllocateSpace":1}}}`)
+					} else {
+						io.WriteString(w, `{"data":{"/storage/pool":{"Datastore.Audit":1,"Datastore.Allocate":1}}}`)
+					}
+				case "/api2/json/nodes/pve/storage/pool/status":
+					io.WriteString(w, `{"data":{"type":"lvmthin","content":"images","total":1073741824,"used":0,"avail":1073741824,"enabled":1,"active":1}}`)
+				case "/api2/json/nodes/pve/tasks":
+					io.WriteString(w, `{"data":[]}`)
+				case "/api2/json/nodes/pve/storage/pool/content":
+					if existing {
+						fmt.Fprintf(w, `{"data":[{"volid":%q,"vmid":7777,"format":"raw","content":"images","size":1073741824}]}`, req.AllocationReference())
+					} else {
+						io.WriteString(w, `{"data":[]}`)
+					}
+				default:
+					t.Errorf("unexpected path: %s", r.URL.Path)
+					w.WriteHeader(500)
+				}
+			}))
+			t.Cleanup(server.Close)
+			client := &Client{httpClient: server.Client(), config: Config{Endpoint: server.URL}}
+			gateway, err := NewStorageGateway(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service, err := volume.NewService(gateway, domain.Scope{Node: "pve", OwnerVMID: 7777})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := service.EnsureVolume(context.Background(), req)
+			if existing {
+				if err != nil || got.ID() != req.Handle() || permissionReads != 1 {
+					t.Fatalf("existing volume: %v, %v, permission reads=%d", got, err, permissionReads)
+				}
+			} else {
+				var backend *volume.BackendError
+				var step *volume.StepError
+				if !errors.As(err, &backend) || backend.Kind() != volume.FailurePermissionDenied || !strings.Contains(backend.Hint(), "Datastore.AllocateSpace on /storage/pool") || !errors.As(err, &step) || step.Step() != "check_allocation_permission" || permissionReads != 3 {
+					t.Fatalf("revoked permission: %v, reads=%d", err, permissionReads)
+				}
+			}
+			if writes != 0 {
+				t.Fatal("unexpected backend mutation")
+			}
+		})
 	}
 }

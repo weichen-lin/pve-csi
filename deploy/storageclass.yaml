@@ -10,8 +10,8 @@ parameters:
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
 allowVolumeExpansion: false
-# Explicit PVE placement for provisioning acceptance without a Node service.
-# This does not label the OrbStack node or make the disk mountable there.
+# Single PVE host placement. Registration reports the same topology.
+# A Bound PVC still cannot be mounted until attach/mount RPCs are implemented.
 allowedTopologies:
   - matchLabelExpressions:
       - key: /pve-node

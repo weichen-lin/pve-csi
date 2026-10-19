@@ -3,6 +3,7 @@ kind: Kustomization
 namespace: pve-csi
 resources:
   - controller.yaml
+  - node.yaml
   - storageclass.yaml
 # PVC is applied separately: deploying the controller must not allocate a disk.
 configMapGenerator:
@@ -10,7 +11,7 @@ configMapGenerator:
     envs: [config.env]
 images:
   - name: pve-csi
-    newTag: dev-009
+    newTag: dev-011
 replacements:
   - source:
       kind: ConfigMap
@@ -20,6 +21,22 @@ replacements:
       - select:
           kind: StorageClass
         fieldPaths: [provisioner]
+      - select:
+          kind: CSIDriver
+        fieldPaths: [metadata.name]
+      - select:
+          kind: DaemonSet
+        fieldPaths: ['spec.template.spec.volumes.[name=socket].hostPath.path']
+        options:
+          delimiter: /
+          index: 5
+      - select:
+          kind: DaemonSet
+        fieldPaths:
+          - spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms.0.matchExpressions.0.key
+        options:
+          delimiter: /
+          index: 0
   - source:
       kind: ConfigMap
       name: pve-csi-config

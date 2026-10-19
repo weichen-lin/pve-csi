@@ -25,7 +25,7 @@ func (s *Service) DeleteVolume(ctx context.Context, id domain.Identity) error {
 	if err != nil {
 		return err
 	}
-	if err := pool.CheckReadable(); err != nil {
+	if err := pool.CheckReady(); err != nil {
 		return AtStep("check_storage_status", id.Reference(), err)
 	}
 	if err := s.storage.CheckIdle(ctx, id.Placement(), id.OwnerVMID()); err != nil {
@@ -41,8 +41,15 @@ func (s *Service) DeleteVolume(ctx context.Context, id domain.Identity) error {
 	if _, err := domain.Restore(id, observed); err != nil {
 		return AtStep("validate_delete_volume", id.Reference(), err)
 	}
-	if err := s.storage.CheckDeletion(ctx, id); err != nil {
-		return err
+	if err := s.storage.CheckDeletionPermission(ctx, id.Placement()); err != nil {
+		return AtStep("check_deletion_permission", id.Reference(), err)
+	}
+	unused, err := s.storage.OwnerUnused(ctx, id.OwnerVMID())
+	if err != nil {
+		return AtStep("check_deletion_owner", id.Reference(), err)
+	}
+	if !unused {
+		return AtStep("check_deletion_owner", id.Reference(), ErrOwnerInUse)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -50,9 +57,7 @@ func (s *Service) DeleteVolume(ctx context.Context, id domain.Identity) error {
 
 	deleteErr := s.storage.Delete(ctx, id)
 	_, found, readErr := s.storage.LookupVolume(ctx, id)
-	var backendErr *BackendError
-	definiteRejection := !errors.Is(deleteErr, ErrDeleteUnconfirmed) && errors.As(deleteErr, &backendErr) &&
-		(backendErr.Kind == FailureUnauthenticated || backendErr.Kind == FailurePermissionDenied || backendErr.Kind == FailureNotFound)
+	definiteRejection := rejectedWrite(deleteErr)
 	finished := deleteErr == nil || definiteRejection || errors.Is(deleteErr, ErrDeleteFailed)
 	if readErr == nil && !found && finished {
 		return nil

@@ -2,11 +2,7 @@ package pve
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
-	"net"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -26,14 +22,13 @@ func NewStorageGateway(client *Client) (*StorageGateway, error) {
 	return &StorageGateway{client: client}, nil
 }
 
-func (g *StorageGateway) InspectPool(ctx context.Context, placement domain.Placement, owner int) (volume.PoolState, error) {
-	permissions, err := g.checkReadAccess(ctx, placement, owner)
-	if err != nil {
-		return volume.PoolState{}, err
+func (g *StorageGateway) InspectPool(ctx context.Context, placement domain.Placement, owner int) (domain.Pool, error) {
+	if err := g.checkReadAccess(ctx, placement, owner); err != nil {
+		return domain.Pool{}, err
 	}
 	storage, err := g.client.Storage(ctx, placement.Node, placement.Storage)
 	if err != nil {
-		return volume.PoolState{}, volume.AtStep("check_storage_status", placement.Node+"/"+placement.Storage, mapError(err))
+		return domain.Pool{}, volume.AtStep("check_storage_status", placement.Node+"/"+placement.Storage, mapError(err))
 	}
 	supportsImages := false
 	for _, content := range strings.Split(storage.Content, ",") {
@@ -42,48 +37,46 @@ func (g *StorageGateway) InspectPool(ctx context.Context, placement domain.Place
 			break
 		}
 	}
-	return volume.PoolState{
-		Pool: domain.Pool{
-			Enabled: storage.Enabled, Active: storage.Active,
-			SupportsVolumes: storage.Type == "lvmthin" && supportsImages,
-			AvailableBytes:  storage.Avail,
-		},
-		// checkReadAccess verifies both endpoint and per-disk visibility.
-		Access: volume.StorageAccess{
-			CanInspect:            true,
-			CanAllocate:           permissions.AllocateSpace,
-			AllocationRequirement: "Datastore.AllocateSpace on /storage/" + placement.Storage,
-		},
+	return domain.Pool{
+		Enabled: storage.Enabled, Active: storage.Active,
+		SupportsVolumes: storage.Type == "lvmthin" && supportsImages,
+		AvailableBytes:  storage.Avail,
 	}, nil
 }
 
-func missingPrivilege(path, privilege string) error {
-	return &volume.BackendError{Kind: volume.FailurePermissionDenied,
-		Hint: "missing " + privilege + " on " + path + "; check both user and token permissions"}
+func (g *StorageGateway) CheckAllocationPermission(ctx context.Context, placement domain.Placement) error {
+	permissions, err := g.client.StoragePermissions(ctx, placement.Storage)
+	if err != nil {
+		return mapError(err)
+	}
+	if !permissions.AllocateSpace {
+		return missingPrivilege("/storage/"+placement.Storage, "Datastore.AllocateSpace")
+	}
+	return nil
 }
 
-func (g *StorageGateway) checkReadAccess(ctx context.Context, placement domain.Placement, owner int) (StoragePermissions, error) {
+func (g *StorageGateway) checkReadAccess(ctx context.Context, placement domain.Placement, owner int) error {
 	path := "/storage/" + placement.Storage
 	permissions, err := g.client.StoragePermissions(ctx, placement.Storage)
 	if err != nil {
-		return StoragePermissions{}, volume.AtStep("check_storage_permissions", path, mapError(err))
+		return volume.AtStep("check_storage_permissions", path, mapError(err))
 	}
 	// Content/status endpoints require Audit or AllocateSpace. Individual disk
 	// visibility additionally requires Allocate OR (Audit AND VM.Config.Disk).
 	if !permissions.Audit && !permissions.AllocateSpace || !permissions.Allocate && !permissions.Audit {
-		return StoragePermissions{}, volume.AtStep("check_storage_permissions", path, missingPrivilege(path, "Datastore.Audit"))
+		return volume.AtStep("check_storage_permissions", path, missingPrivilege(path, "Datastore.Audit"))
 	}
 	if !permissions.Allocate {
 		path = "/vms/" + strconv.Itoa(owner)
 		allowed, err := g.client.CanConfigureDisk(ctx, owner)
 		if err != nil {
-			return StoragePermissions{}, volume.AtStep("check_owner_permissions", path, mapError(err))
+			return volume.AtStep("check_owner_permissions", path, mapError(err))
 		}
 		if !allowed {
-			return StoragePermissions{}, volume.AtStep("check_owner_permissions", path, missingPrivilege(path, "VM.Config.Disk"))
+			return volume.AtStep("check_owner_permissions", path, missingPrivilege(path, "VM.Config.Disk"))
 		}
 	}
-	return permissions, nil
+	return nil
 }
 
 func (g *StorageGateway) LookupVolume(ctx context.Context, id domain.Identity) (domain.Allocation, bool, error) {
@@ -115,7 +108,7 @@ func (g *StorageGateway) lookup(ctx context.Context, placement domain.Placement,
 	if matched == nil {
 		// A permission change can turn an existing disk into an empty list.
 		// Recheck before treating that observation as absence.
-		if _, err := g.checkReadAccess(ctx, placement, owner); err != nil {
+		if err := g.checkReadAccess(ctx, placement, owner); err != nil {
 			return domain.Allocation{}, false, err
 		}
 		return domain.Allocation{}, false, nil
@@ -146,27 +139,21 @@ func (g *StorageGateway) CheckIdle(ctx context.Context, placement domain.Placeme
 	return nil
 }
 
-func (g *StorageGateway) CheckDeletion(ctx context.Context, id domain.Identity) error {
-	if err := id.Validate(); err != nil {
-		return err
-	}
-	path := "/storage/" + id.Placement().Storage
-	permissions, err := g.client.StoragePermissions(ctx, id.Placement().Storage)
+func (g *StorageGateway) CheckDeletionPermission(ctx context.Context, placement domain.Placement) error {
+	path := "/storage/" + placement.Storage
+	permissions, err := g.client.StoragePermissions(ctx, placement.Storage)
 	if err != nil {
-		return volume.AtStep("check_deletion_permission", path, mapError(err))
+		return mapError(err)
 	}
 	if !permissions.Allocate {
-		return volume.AtStep("check_deletion_permission", path, missingPrivilege(path, "Datastore.Allocate"))
-	}
-	unused, err := g.client.OwnerUnused(ctx, id.OwnerVMID())
-	path = "/vms/" + strconv.Itoa(id.OwnerVMID())
-	if err != nil {
-		return volume.AtStep("check_deletion_owner", path, mapError(err))
-	}
-	if !unused {
-		return volume.AtStep("check_deletion_owner", path, volume.ErrOwnerInUse)
+		return missingPrivilege(path, "Datastore.Allocate")
 	}
 	return nil
+}
+
+func (g *StorageGateway) OwnerUnused(ctx context.Context, owner int) (bool, error) {
+	unused, err := g.client.OwnerUnused(ctx, owner)
+	return unused, mapError(err)
 }
 
 func (g *StorageGateway) Delete(ctx context.Context, id domain.Identity) error {
@@ -201,46 +188,4 @@ func (g *StorageGateway) Delete(ctx context.Context, id domain.Identity) error {
 		case <-timer.C:
 		}
 	}
-}
-
-func mapError(err error) error {
-	if err == nil {
-		return nil
-	}
-	kind := volume.FailureInternal
-	hint := ""
-	var httpErr *HTTPError
-	if errors.Is(err, ErrStorageNotFound) {
-		kind = volume.FailureNotFound
-		hint = "PVE storage was not found; check the storage parameter in StorageClass"
-	} else if errors.As(err, &httpErr) {
-		switch httpErr.StatusCode {
-		case http.StatusUnauthorized:
-			kind = volume.FailureUnauthenticated
-		case http.StatusForbidden:
-			kind = volume.FailurePermissionDenied
-		case http.StatusNotFound:
-			kind = volume.FailureNotFound
-		default:
-			if httpErr.StatusCode == http.StatusTooManyRequests || httpErr.StatusCode >= 500 {
-				kind = volume.FailureUnavailable
-			}
-		}
-	} else {
-		var certificateErr *tls.CertificateVerificationError
-		var hostnameErr x509.HostnameError
-		var authorityErr x509.UnknownAuthorityError
-		var networkErr net.Error
-		switch {
-		case errors.As(err, &certificateErr), errors.As(err, &hostnameErr), errors.As(err, &authorityErr):
-			kind = volume.FailurePrecondition
-			hint = "PVE TLS certificate verification failed; check PVE_CA_FILE and the hostname in PVE_ENDPOINT"
-		case errors.As(err, &networkErr):
-			kind = volume.FailureUnavailable
-			hint = "cannot reach PVE; check PVE_ENDPOINT and network connectivity"
-		}
-	}
-	backendErr := volume.NewBackendError(kind, err)
-	backendErr.Hint = hint
-	return backendErr
 }

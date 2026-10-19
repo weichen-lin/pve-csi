@@ -1,0 +1,144 @@
+# Render with kubectl kustomize deploy. Identity/registration only; no mounts yet.
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: driver
+spec:
+  # Do not skip attachment: ControllerPublishVolume is still unimplemented.
+  attachRequired: true
+  podInfoOnMount: false
+  fsGroupPolicy: None
+  volumeLifecycleModes: [Persistent]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: pve-csi-node
+spec:
+  selector:
+    matchLabels:
+      app: pve-csi-node
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  template:
+    metadata:
+      labels:
+        app: pve-csi-node
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        kubernetes.io/os: linux
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: driver/node
+                    operator: In
+                    values: ["true"]
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        # product_uuid and kubelet directories are root-owned on the host.
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: csi
+          image: pve-csi
+          imagePullPolicy: Never
+          args: [node, --endpoint=unix:///csi/csi.sock]
+          env:
+            - name: CSI_DRIVER_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: pve-csi-config
+                  key: CSI_DRIVER_NAME
+            - name: PVE_NODE
+              valueFrom:
+                configMapKeyRef:
+                  name: pve-csi-config
+                  key: PVE_NODE
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          readinessProbe:
+            exec:
+              command: [/bin/sh, -c, test -S /csi/csi.sock]
+            periodSeconds: 5
+          volumeMounts:
+            - name: socket
+              mountPath: /csi
+            - name: uuid
+              mountPath: /sys/class/dmi/id/product_uuid
+              readOnly: true
+        - name: registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.18.0@sha256:b7fefd08651f00ac4df1a196ed4c621c2451fbb899297fe9fad9e36c667af0c0
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path=/var/lib/kubelet/plugins/$(CSI_DRIVER_NAME)/csi.sock
+            - --http-endpoint=:9809
+          env:
+            - name: CSI_DRIVER_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: pve-csi-config
+                  key: CSI_DRIVER_NAME
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          ports:
+            - name: health
+              containerPort: 9809
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: socket
+              mountPath: /csi
+            - name: registration
+              mountPath: /registration
+      volumes:
+        - name: socket
+          hostPath:
+            path: /var/lib/kubelet/plugins/driver
+            type: DirectoryOrCreate
+        - name: registration
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: uuid
+          hostPath:
+            path: /sys/class/dmi/id/product_uuid
+            type: File

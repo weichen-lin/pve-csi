@@ -20,6 +20,14 @@ type Config struct {
 
 var ownerVMIDPattern = regexp.MustCompile(`^[1-9][0-9]{2,8}$`)
 
+func LoadNodeConfig(getenv func(string) string) (csidriver.NodeConfig, error) {
+	cfg := csidriver.NodeConfig{
+		DriverName: strings.TrimSpace(getenv("CSI_DRIVER_NAME")),
+		PVENode:    strings.TrimSpace(getenv("PVE_NODE")),
+	}
+	return cfg, cfg.Validate()
+}
+
 func LoadConfig(getenv func(string) string) (Config, error) {
 	connection, err := (pve.Config{
 		Endpoint: getenv("PVE_ENDPOINT"), TokenID: getenv("PVE_TOKEN_ID"),

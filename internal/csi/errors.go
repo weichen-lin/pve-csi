@@ -47,6 +47,14 @@ func csiBackendError(err error) error {
 		return stepStatus(err, codes.Canceled, "volume request canceled")
 	case errors.Is(err, context.DeadlineExceeded):
 		return stepStatus(err, codes.DeadlineExceeded, "volume request deadline exceeded; retry with the same name and configuration")
+	case errors.Is(err, domain.ErrInvalidNodeID):
+		return stepStatus(err, codes.InvalidArgument, "node_id must be a nonzero VM UUID")
+	case errors.Is(err, domain.ErrNodeNotFound):
+		return stepStatus(err, codes.NotFound, "no VM matches the node UUID on the configured PVE_NODE")
+	case errors.Is(err, domain.ErrNodeAmbiguous):
+		return stepStatus(err, codes.FailedPrecondition, "multiple VMs share the node UUID; configure unique VM UUIDs before retrying")
+	case errors.Is(err, domain.ErrInvalidInventory):
+		return stepStatus(err, codes.Internal, "PVE VM inventory is invalid or incomplete; cannot confirm node identity")
 	case errors.Is(err, volume.ErrBusy):
 		return stepStatus(err, codes.Aborted, "another volume operation is in progress; wait and retry")
 	case errors.Is(err, volume.ErrOutsideScope):
@@ -96,7 +104,7 @@ func csiDeleteError(err error) error {
 
 func backendFailure(err *volume.BackendError) (codes.Code, string) {
 	code, message := codes.Internal, "PVE returned an invalid or unexpected response"
-	switch err.Kind {
+	switch err.Kind() {
 	case volume.FailureUnauthenticated:
 		code, message = codes.Unauthenticated, "PVE authentication failed; check PVE_TOKEN_ID and PVE_TOKEN_SECRET"
 	case volume.FailurePermissionDenied:
@@ -108,8 +116,8 @@ func backendFailure(err *volume.BackendError) (codes.Code, string) {
 	case volume.FailurePrecondition:
 		code, message = codes.FailedPrecondition, "PVE connection configuration is invalid"
 	}
-	if err.Hint != "" {
-		message = err.Hint
+	if err.Hint() != "" {
+		message = err.Hint()
 	}
 	return code, message
 }
@@ -117,7 +125,7 @@ func backendFailure(err *volume.BackendError) (codes.Code, string) {
 func stepStatus(err error, code codes.Code, message string) error {
 	var step *volume.StepError
 	if errors.As(err, &step) {
-		message = fmt.Sprintf("[%s] %s: %s", step.Step, step.Target, message)
+		message = fmt.Sprintf("[%s] %s: %s", step.Step(), step.Target(), message)
 	}
 	return status.Error(code, message)
 }

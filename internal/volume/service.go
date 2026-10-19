@@ -48,7 +48,7 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 	if err != nil {
 		return domain.Volume{}, err
 	}
-	if err := pool.CheckReadable(); err != nil {
+	if err := pool.CheckReady(); err != nil {
 		return domain.Volume{}, AtStep("check_storage_status", target, err)
 	}
 	if err := s.storage.CheckIdle(ctx, req.Placement(), req.OwnerVMID); err != nil {
@@ -60,16 +60,16 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 		return existing, nil
 	}
 	// This observation is a preflight, not a capacity reservation.
-	if err := pool.CheckAllocationPermission(); err != nil {
+	if err := s.storage.CheckAllocationPermission(ctx, req.Placement()); err != nil {
 		return domain.Volume{}, AtStep("check_allocation_permission", target, err)
 	}
-	if err := pool.Pool.CheckCapacity(req.CapacityBytes); err != nil {
+	if err := pool.CheckCapacity(req.CapacityBytes); err != nil {
 		return domain.Volume{}, AtStep("check_capacity", target, err)
 	}
 	reference, postErr := s.storage.Allocate(ctx, req)
 	unexpectedID := postErr == nil && reference != req.AllocationReference()
 	if unexpectedID {
-		postErr = errors.New("PVE allocation returned an unexpected volume ID")
+		postErr = errors.New("storage allocation returned an unexpected volume ID")
 	}
 	// Always read back after the one allocation attempt, using the caller's
 	// context. Never retry the write, rename or delete an uncertain result here.
@@ -80,11 +80,10 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 	if lookupErr == nil && !found {
 		// Authentication/authorization/route rejection is a definite failure,
 		// unlike a lost connection or 5xx after the server accepted the write.
-		var backendErr *BackendError
-		if errors.As(postErr, &backendErr) && (backendErr.Kind == FailureUnauthenticated || backendErr.Kind == FailurePermissionDenied || backendErr.Kind == FailureNotFound) {
+		if rejectedWrite(postErr) {
 			return domain.Volume{}, AtStep("allocate_volume", target, postErr)
 		}
-		lookupErr = errors.New("expected volume is not visible in PVE storage content")
+		lookupErr = errors.New("expected volume is not visible in storage")
 	}
 	return domain.Volume{}, AtStep("confirm_volume", target, fmt.Errorf("%w: %w", ErrUnconfirmed, errors.Join(postErr, lookupErr)))
 }
@@ -133,7 +132,7 @@ func (s *Service) GetVolume(ctx context.Context, id domain.Identity) (domain.Vol
 	if err != nil {
 		return domain.Volume{}, err
 	}
-	if err := pool.CheckReadable(); err != nil {
+	if err := pool.CheckReady(); err != nil {
 		return domain.Volume{}, AtStep("check_storage_status", target, err)
 	}
 	observed, found, err := s.storage.LookupVolume(ctx, id)

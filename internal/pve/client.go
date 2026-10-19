@@ -150,38 +150,3 @@ func (c *Client) requestData(ctx context.Context, method, apiPath string, form u
 	}
 	return nil
 }
-
-// HTTPError preserves status classification without retaining a server body
-// or credentials.
-type HTTPError struct {
-	Method     string
-	Path       string
-	StatusCode int
-}
-
-func (e *HTTPError) Error() string {
-	return fmt.Sprintf("PVE %s %s: HTTP %d (%s)", e.Method, e.Path, e.StatusCode, http.StatusText(e.StatusCode))
-}
-
-var ErrStorageNotFound = errors.New("PVE storage not found")
-
-// decodeAPIError translates recognized PVE errors while preserving HTTP facts.
-// Unrecognized or unreadable bodies remain HTTP errors; response text is never retained.
-func decodeAPIError(httpErr *HTTPError, response io.Reader) error {
-	if httpErr.StatusCode != http.StatusBadRequest {
-		return httpErr
-	}
-	const maxErrorBytes = 64 << 10
-	body, err := io.ReadAll(io.LimitReader(response, maxErrorBytes+1))
-	if err != nil || len(body) > maxErrorBytes {
-		return httpErr
-	}
-	var validation struct {
-		Errors map[string]string `json:"errors"`
-	}
-	// PVE reports missing storage as a field validation error instead of HTTP 404.
-	if json.Unmarshal(body, &validation) == nil && len(validation.Errors) == 1 && validation.Errors["storage"] == "No such storage." {
-		return fmt.Errorf("%w: %w", ErrStorageNotFound, httpErr)
-	}
-	return httpErr
-}
