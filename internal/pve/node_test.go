@@ -13,7 +13,7 @@ import (
 	"pve-csi.local/csi-plugin/internal/volume"
 )
 
-func TestResolveNode(t *testing.T) {
+func TestNodeInventory(t *testing.T) {
 	const uuid = "153a7c9e-588b-483f-884a-4eba01bc160a"
 	const other = "38f7a2bf-c484-47c9-90f6-250caaf28986"
 	const listPath = "/api2/json/nodes/pve/qemu"
@@ -28,15 +28,17 @@ func TestResolveNode(t *testing.T) {
 		step   string
 	}{
 		{name: "unique including template"},
-		{name: "missing", path: listPath, body: `{"data":[]}`, want: domain.ErrNodeNotFound, step: "resolve_node"},
-		{name: "duplicate UUID", path: configPath, body: `{"data":{"smbios1":"uuid=` + uuid + `"}}`, want: domain.ErrNodeAmbiguous, step: "resolve_node"},
+		{name: "missing", path: listPath, body: `{"data":[]}`, want: domain.ErrNodeNotFound},
+		{name: "duplicate UUID", path: configPath, body: `{"data":{"smbios1":"uuid=` + uuid + `"}}`, want: domain.ErrNodeAmbiguous},
 		{name: "no audit", path: "/vms", body: `{"data":{}}`, kind: volume.FailurePermissionDenied, step: "check_vm_permissions"},
 		{name: "audit does not propagate", path: "/vms", body: `{"data":{"/vms":{"VM.Audit":0}}}`, kind: volume.FailurePermissionDenied, step: "check_vm_permissions"},
 		{name: "child denied", path: "/vms/101", body: `{"data":{}}`, kind: volume.FailurePermissionDenied, step: "check_vm_permissions"},
 		{name: "401", path: listPath, status: 401, kind: volume.FailureUnauthenticated, step: "list_vms"},
 		{name: "403 after match", path: configPath, status: 403, kind: volume.FailurePermissionDenied, step: "read_vm_identity"},
 		{name: "500 after match", path: configPath, status: 500, kind: volume.FailureUnavailable, step: "read_vm_identity"},
-		{name: "bad config", path: configPath, body: `{"data":{}}`, kind: volume.FailureInternal, step: "read_vm_identity"},
+		{name: "unrelated VM without SMBIOS", path: configPath, body: `{"data":{}}`},
+		{name: "unrelated VM without UUID", path: configPath, body: `{"data":{"smbios1":"serial=abc"}}`},
+		{name: "only VM has no UUID", path: listPath + "/100/config", body: `{"data":{}}`, want: domain.ErrNodeNotFound},
 		{name: "duplicate UUID field", path: configPath, body: `{"data":{"smbios1":"uuid=` + other + `,uuid=` + uuid + `"}}`, kind: volume.FailureInternal, step: "read_vm_identity"},
 		{name: "malformed UUID", path: configPath, body: `{"data":{"smbios1":"uuid=bad"}}`, kind: volume.FailureInternal, step: "read_vm_identity"},
 		{name: "became template", path: configPath, body: `{"data":{"template":1,"smbios1":"uuid=` + other + `"}}`, kind: volume.FailureInternal, step: "read_vm_identity"},
@@ -99,12 +101,13 @@ func TestResolveNode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resolver, err := volume.NewNodeResolver(inventory, "pve")
-			if err != nil {
-				t.Fatal(err)
+			machines, err := inventory.VirtualMachines(context.Background(), "pve")
+			var vm domain.VirtualMachine
+			if err == nil {
+				id, _ := domain.ParseNodeID(uuid)
+				vm, err = domain.MatchNode("pve", id, machines)
 			}
-			vm, err := resolver.Resolve(context.Background(), uuid)
-			if tt.step == "" {
+			if tt.step == "" && tt.want == nil {
 				if err != nil || vm.VMID != 100 || vm.ID.String() != uuid || rootChecks != 2 {
 					t.Fatalf("Resolve = %v, %v; root checks %d", vm, err, rootChecks)
 				}
@@ -113,9 +116,11 @@ func TestResolveNode(t *testing.T) {
 			if err == nil || vm != (domain.VirtualMachine{}) {
 				t.Fatalf("partial success: %v, %v", vm, err)
 			}
-			var step *volume.StepError
-			if !errors.As(err, &step) || step.Step() != tt.step {
-				t.Fatalf("step = %v, want %s", err, tt.step)
+			if tt.step != "" {
+				var step *volume.StepError
+				if !errors.As(err, &step) || step.Step() != tt.step {
+					t.Fatalf("step = %v, want %s", err, tt.step)
+				}
 			}
 			if tt.want != nil {
 				if !errors.Is(err, tt.want) {

@@ -12,7 +12,6 @@ var (
 	ErrBusy              = errors.New("another volume operation is in progress; retry")
 	ErrDeleteUnconfirmed = errors.New("volume deletion outcome unconfirmed")
 	ErrDeleteFailed      = errors.New("volume deletion task failed")
-	ErrOwnerInUse        = errors.New("reserved disk owner VMID is used by a VM or container")
 )
 
 type FailureKind int

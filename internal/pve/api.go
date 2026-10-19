@@ -11,15 +11,13 @@ import (
 	"strings"
 
 	"pve-csi.local/csi-plugin/internal/domain"
+	"pve-csi.local/csi-plugin/internal/volume"
+	"time"
 )
 
 type StorageInfo struct {
-	Node    string
-	Storage string
 	Type    string
 	Content string
-	Total   int64
-	Used    int64
 	Avail   int64
 	Enabled bool
 	Active  bool
@@ -34,8 +32,6 @@ func (c *Client) Storage(ctx context.Context, node, storageID string) (StorageIn
 		Content string `json:"content"`
 		Enabled *int   `json:"enabled"`
 		Active  *int   `json:"active"`
-		Total   *int64 `json:"total"`
-		Used    *int64 `json:"used"`
 		Avail   *int64 `json:"avail"`
 	}
 	apiPath := fmt.Sprintf("/api2/json/nodes/%s/storage/%s/status", url.PathEscape(node), url.PathEscape(storageID))
@@ -51,15 +47,14 @@ func (c *Client) Storage(ctx context.Context, node, storageID string) (StorageIn
 	if (*status.Enabled != 0 && *status.Enabled != 1) || (*status.Active != 0 && *status.Active != 1) {
 		return StorageInfo{}, errors.New("PVE storage status has an invalid enabled or active flag")
 	}
-	if status.Total == nil || status.Used == nil || status.Avail == nil {
-		return StorageInfo{}, errors.New("PVE storage status is missing total, used or avail")
+	if status.Avail == nil {
+		return StorageInfo{}, errors.New("PVE storage status is missing available capacity")
 	}
-	if *status.Total < 0 || *status.Used < 0 || *status.Avail < 0 {
+	if *status.Avail < 0 {
 		return StorageInfo{}, errors.New("PVE storage status contains a negative capacity")
 	}
 	return StorageInfo{
-		Node: node, Storage: storageID, Type: status.Type, Content: status.Content,
-		Total: *status.Total, Used: *status.Used, Avail: *status.Avail,
+		Type: status.Type, Content: status.Content, Avail: *status.Avail,
 		Enabled: *status.Enabled == 1, Active: *status.Active == 1,
 	}, nil
 }
@@ -96,7 +91,7 @@ func (c *Client) DeleteImage(ctx context.Context, node, storage, reference strin
 	return upid, err
 }
 
-type DeletionTask struct {
+type taskStatus struct {
 	UPID       string `json:"upid"`
 	Type       string `json:"type"`
 	ID         string `json:"id"`
@@ -104,26 +99,35 @@ type DeletionTask struct {
 	ExitStatus string `json:"exitstatus"`
 }
 
-func validDeletionTask(upid, node, id string) bool {
+// waitTask observes only the task returned for the expected operation/target.
+// Callers set their deadline and translate exit status into operation-specific errors.
+func (c *Client) waitTask(ctx context.Context, node, upid, kind, id string) (string, error) {
 	parts := strings.Split(upid, ":")
-	return len(parts) == 9 && parts[0] == "UPID" && parts[1] == node &&
-		parts[5] == "imgdel" && parts[6] == id && parts[7] != "" && parts[8] == ""
-}
-
-func (c *Client) DeletionStatus(ctx context.Context, node, upid, id string) (DeletionTask, error) {
-	if !validDeletionTask(upid, node, id) {
-		return DeletionTask{}, errors.New("PVE returned an unexpected deletion task ID")
+	if len(parts) != 9 || parts[0] != "UPID" || parts[1] != node ||
+		parts[5] != kind || parts[6] != id || parts[7] == "" || parts[8] != "" {
+		return "", errors.New("PVE returned an unexpected task ID")
 	}
 	path := fmt.Sprintf("/api2/json/nodes/%s/tasks/%s/status", url.PathEscape(node), url.PathEscape(upid))
-	var task DeletionTask
-	if err := c.getData(ctx, path, &task); err != nil {
-		return task, err
+	for {
+		var task taskStatus
+		if err := c.getData(ctx, path, &task); err != nil {
+			return "", err
+		}
+		if task.UPID != upid || task.Type != kind || task.ID != id ||
+			(task.Status != "running" && task.Status != "stopped") || (task.Status == "stopped" && task.ExitStatus == "") {
+			return "", errors.New("PVE returned an invalid task status")
+		}
+		if task.Status == "stopped" {
+			return task.ExitStatus, nil
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
 	}
-	if task.UPID != upid || task.Type != "imgdel" || task.ID != id ||
-		(task.Status != "running" && task.Status != "stopped") || (task.Status == "stopped" && task.ExitStatus == "") {
-		return DeletionTask{}, errors.New("PVE returned an invalid deletion task status")
-	}
-	return task, nil
 }
 
 // PVE task IDs identify owner@storage, not an individual disk. Conservatively
@@ -131,9 +135,8 @@ func (c *Client) DeletionStatus(ctx context.Context, node, upid, id string) (Del
 func (c *Client) HasActiveDeletion(ctx context.Context, node, id string) (bool, error) {
 	for start := 0; ; start += 100 {
 		query := url.Values{"source": {"active"}, "typefilter": {"imgdel"}, "limit": {"100"}, "start": {strconv.Itoa(start)}}
-		var tasks []DeletionTask
-		path := fmt.Sprintf("/api2/json/nodes/%s/tasks?%s", url.PathEscape(node), query.Encode())
-		if err := c.getData(ctx, path, &tasks); err != nil {
+		tasks, err := c.activeTasks(ctx, node, query)
+		if err != nil {
 			return false, err
 		}
 		for _, task := range tasks {
@@ -150,9 +153,41 @@ func (c *Client) HasActiveDeletion(ctx context.Context, node, id string) (bool, 
 	}
 }
 
-// This provisioning-only driver uses a reserved owner VMID with no VM/CT.
+// Without Sys.Audit, PVE silently filters tasks to the current user/token.
+// Check before and after reading so a filtered empty list never proves idle.
+func (c *Client) activeTasks(ctx context.Context, node string, query url.Values) ([]taskStatus, error) {
+	if !domain.ValidNodeName(node) {
+		return nil, domain.ErrInvalidInventory
+	}
+	if err := c.checkTaskAccess(ctx, node); err != nil {
+		return nil, err
+	}
+	var tasks []taskStatus
+	path := "/api2/json/nodes/" + url.PathEscape(node) + "/tasks?" + query.Encode()
+	if err := c.getData(ctx, path, &tasks); err != nil {
+		return nil, err
+	}
+	if err := c.checkTaskAccess(ctx, node); err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
+func (c *Client) checkTaskAccess(ctx context.Context, node string) error {
+	path := "/nodes/" + node
+	privileges, err := c.permissions(ctx, path)
+	if err != nil {
+		return volume.AtStep("check_task_permissions", path, mapError(err))
+	}
+	if _, allowed := privileges["Sys.Audit"]; !allowed {
+		return volume.AtStep("check_task_permissions", path, missingPrivilege(path, "Sys.Audit"))
+	}
+	return nil
+}
+
+// Allocation ownership is reserved independently of the VM using the disk.
 func (c *Client) OwnerUnused(ctx context.Context, owner int) (bool, error) {
-	if owner < 100 || owner > 999999999 {
+	if !domain.ValidVMID(owner) {
 		return false, errors.New("invalid owner VMID")
 	}
 	var next json.Number
@@ -195,7 +230,7 @@ func (c *Client) StoragePermissions(ctx context.Context, storageID string) (Stor
 }
 
 func (c *Client) CanConfigureDisk(ctx context.Context, owner int) (bool, error) {
-	if owner < 100 || owner > 999999999 {
+	if !domain.ValidVMID(owner) {
 		return false, errors.New("invalid disk owner VMID")
 	}
 	privileges, err := c.permissions(ctx, "/vms/"+strconv.Itoa(owner))

@@ -18,7 +18,7 @@ type Config struct {
 	Scope      domain.Scope
 }
 
-var ownerVMIDPattern = regexp.MustCompile(`^[1-9][0-9]{2,8}$`)
+var ownerVMIDPattern = regexp.MustCompile(`^[1-9][0-9]*$`)
 
 func LoadNodeConfig(getenv func(string) string) (csidriver.NodeConfig, error) {
 	cfg := csidriver.NodeConfig{
@@ -37,12 +37,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	owner := strings.TrimSpace(getenv("PVE_OWNER_VMID"))
-	if !ownerVMIDPattern.MatchString(owner) {
-		return Config{}, errors.New("PVE_OWNER_VMID is required and must be an integer from 100 to 999999999 without leading zeros")
-	}
 	vmid, err := strconv.Atoi(owner)
-	if err != nil {
-		return Config{}, errors.New("PVE_OWNER_VMID could not be parsed")
+	if !ownerVMIDPattern.MatchString(owner) || err != nil || !domain.ValidVMID(vmid) {
+		return Config{}, errors.New("PVE_OWNER_VMID is required and must be an integer from 100 to 999999999 without leading zeros")
 	}
 	controller := csidriver.Config{
 		DriverName: strings.TrimSpace(getenv("CSI_DRIVER_NAME")),

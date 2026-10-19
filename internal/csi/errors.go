@@ -31,6 +31,9 @@ func csiReadError(err error) error {
 }
 
 func csiBackendError(err error) error {
+	if errors.Is(err, volume.ErrAttachmentUnconfirmed) {
+		return stepStatus(err, codes.Unavailable, "VM disk change outcome is unknown; retry the same request and inspect PVE Tasks")
+	}
 	if errors.Is(err, volume.ErrUnconfirmed) {
 		message := "allocation outcome is unknown; disk may already exist; retry with the same name, node, storage and owner"
 		var backendErr *volume.BackendError
@@ -43,6 +46,24 @@ func csiBackendError(err error) error {
 		return stepStatus(err, codes.Unavailable, message)
 	}
 	switch {
+	case errors.Is(err, domain.ErrInvalidHandle):
+		return stepStatus(err, codes.InvalidArgument, "invalid v1 volume ID")
+	case errors.Is(err, volume.ErrInvalidMountPath):
+		return stepStatus(err, codes.InvalidArgument, volume.ErrInvalidMountPath.Error())
+	case errors.Is(err, volume.ErrDeviceNotFound):
+		return stepStatus(err, codes.Unavailable, volume.ErrDeviceNotFound.Error())
+	case errors.Is(err, volume.ErrMountConflict):
+		return stepStatus(err, codes.AlreadyExists, volume.ErrMountConflict.Error())
+	case errors.Is(err, volume.ErrUnsafeMount):
+		return stepStatus(err, codes.FailedPrecondition, volume.ErrUnsafeMount.Error())
+	case errors.Is(err, volume.ErrMountInUse):
+		return stepStatus(err, codes.FailedPrecondition, volume.ErrMountInUse.Error())
+	case errors.Is(err, domain.ErrVolumeInUse):
+		return stepStatus(err, codes.FailedPrecondition, domain.ErrVolumeInUse.Error())
+	case errors.Is(err, domain.ErrAttachmentConflict):
+		return stepStatus(err, codes.FailedPrecondition, domain.ErrAttachmentConflict.Error())
+	case errors.Is(err, domain.ErrOwnerInUse):
+		return stepStatus(err, codes.FailedPrecondition, domain.ErrOwnerInUse.Error())
 	case errors.Is(err, context.Canceled):
 		return stepStatus(err, codes.Canceled, "volume request canceled")
 	case errors.Is(err, context.DeadlineExceeded):
@@ -93,8 +114,6 @@ func csiDeleteError(err error) error {
 		return stepStatus(err, codes.InvalidArgument, "invalid v1 volume ID; deletion refused")
 	case errors.Is(err, domain.ErrConflict):
 		return stepStatus(err, codes.FailedPrecondition, "disk metadata does not match the requested volume; deletion refused")
-	case errors.Is(err, volume.ErrOwnerInUse):
-		return stepStatus(err, codes.FailedPrecondition, "owner VMID belongs to a VM or container; this driver only deletes disks under a reserved unused owner")
 	case errors.Is(err, volume.ErrDeleteFailed):
 		return stepStatus(err, codes.FailedPrecondition, "PVE deletion task failed; inspect Tasks in PVE before retrying")
 	default:
@@ -103,18 +122,18 @@ func csiDeleteError(err error) error {
 }
 
 func backendFailure(err *volume.BackendError) (codes.Code, string) {
-	code, message := codes.Internal, "PVE returned an invalid or unexpected response"
+	code, message := codes.Internal, "volume backend returned an invalid or unexpected response"
 	switch err.Kind() {
 	case volume.FailureUnauthenticated:
-		code, message = codes.Unauthenticated, "PVE authentication failed; check PVE_TOKEN_ID and PVE_TOKEN_SECRET"
+		code, message = codes.Unauthenticated, "volume backend authentication failed"
 	case volume.FailurePermissionDenied:
-		code, message = codes.PermissionDenied, "PVE denied the operation; check both user and token permissions"
+		code, message = codes.PermissionDenied, "volume backend denied the operation"
 	case volume.FailureNotFound:
-		code, message = codes.FailedPrecondition, "PVE resource was not found; check the node and storage names"
+		code, message = codes.FailedPrecondition, "required backend resource was not found"
 	case volume.FailureUnavailable:
-		code, message = codes.Unavailable, "PVE is unavailable; check network connectivity and PVE service status"
+		code, message = codes.Unavailable, "volume backend is unavailable"
 	case volume.FailurePrecondition:
-		code, message = codes.FailedPrecondition, "PVE connection configuration is invalid"
+		code, message = codes.FailedPrecondition, "volume backend precondition is not satisfied"
 	}
 	if err.Hint() != "" {
 		message = err.Hint()
@@ -123,9 +142,21 @@ func backendFailure(err *volume.BackendError) (codes.Code, string) {
 }
 
 func stepStatus(err error, code codes.Code, message string) error {
+	stepName := ""
 	var step *volume.StepError
 	if errors.As(err, &step) {
+		stepName = step.Step()
 		message = fmt.Sprintf("[%s] %s: %s", step.Step(), step.Target(), message)
 	}
-	return status.Error(code, message)
+	return &operationStatus{status: status.New(code, message), step: stepName}
 }
+
+// The protocol translation is also the safe diagnostic boundary. Original
+// backend errors are deliberately absent; only authored client-safe text remains.
+type operationStatus struct {
+	status *status.Status
+	step   string
+}
+
+func (e *operationStatus) Error() string              { return e.status.Err().Error() }
+func (e *operationStatus) GRPCStatus() *status.Status { return e.status }

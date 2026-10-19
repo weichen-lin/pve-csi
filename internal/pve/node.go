@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"pve-csi.local/csi-plugin/internal/domain"
 	"pve-csi.local/csi-plugin/internal/volume"
@@ -41,7 +40,7 @@ func (g *NodeInventory) VirtualMachines(ctx context.Context, node string) ([]dom
 	if err := g.checkInventoryAccess(ctx); err != nil {
 		return nil, err
 	}
-	entries, err := g.client.listVMs(ctx, node)
+	entries, err := g.client.listGuests(ctx, node, "qemu")
 	if err != nil {
 		return nil, volume.AtStep("list_vms", node, mapError(err))
 	}
@@ -50,15 +49,13 @@ func (g *NodeInventory) VirtualMachines(ctx context.Context, node string) ([]dom
 		if entry.Template == 1 {
 			continue
 		}
-		path := "/vms/" + strconv.Itoa(entry.VMID)
-		privileges, err := g.client.permissions(ctx, path)
-		if err != nil {
-			return nil, volume.AtStep("check_vm_permissions", path, mapError(err))
-		}
-		if _, allowed := privileges["VM.Audit"]; !allowed {
-			return nil, volume.AtStep("check_vm_permissions", path, missingPrivilege(path, "VM.Audit"))
+		if err := g.client.checkVMReadAccess(ctx, entry.VMID); err != nil {
+			return nil, err
 		}
 		vm, err := g.client.vmIdentity(ctx, node, entry.VMID)
+		if errors.Is(err, errMissingVMUUID) {
+			continue
+		}
 		if err != nil {
 			return nil, volume.AtStep("read_vm_identity", node+"/"+strconv.Itoa(entry.VMID), mapError(err))
 		}
@@ -76,14 +73,17 @@ type vmEntry struct {
 	Template int `json:"template"`
 }
 
-func (c *Client) listVMs(ctx context.Context, node string) ([]vmEntry, error) {
+func (c *Client) listGuests(ctx context.Context, node, kind string) ([]vmEntry, error) {
+	if !domain.ValidNodeName(node) || (kind != "qemu" && kind != "lxc") {
+		return nil, domain.ErrInvalidInventory
+	}
 	var entries []vmEntry
-	if err := c.getData(ctx, "/api2/json/nodes/"+url.PathEscape(node)+"/qemu", &entries); err != nil {
+	if err := c.getData(ctx, "/api2/json/nodes/"+url.PathEscape(node)+"/"+kind, &entries); err != nil {
 		return nil, err
 	}
 	seen := make(map[int]bool, len(entries))
 	for _, entry := range entries {
-		if entry.VMID < 100 || entry.VMID > 999999999 || seen[entry.VMID] || (entry.Template != 0 && entry.Template != 1) {
+		if !domain.ValidVMID(entry.VMID) || seen[entry.VMID] || (entry.Template != 0 && entry.Template != 1) {
 			return nil, domain.ErrInvalidInventory
 		}
 		seen[entry.VMID] = true
@@ -91,11 +91,20 @@ func (c *Client) listVMs(ctx context.Context, node string) ([]vmEntry, error) {
 	return entries, nil
 }
 
-func (c *Client) vmIdentity(ctx context.Context, node string, vmid int) (domain.VirtualMachine, error) {
-	var config struct {
-		SMBIOS   string `json:"smbios1"`
-		Template int    `json:"template"`
+func (c *Client) checkVMReadAccess(ctx context.Context, vmid int) error {
+	path := "/vms/" + strconv.Itoa(vmid)
+	privileges, err := c.permissions(ctx, path)
+	if err != nil {
+		return volume.AtStep("check_vm_permissions", path, mapError(err))
 	}
+	if _, allowed := privileges["VM.Audit"]; !allowed {
+		return volume.AtStep("check_vm_permissions", path, missingPrivilege(path, "VM.Audit"))
+	}
+	return nil
+}
+
+func (c *Client) vmIdentity(ctx context.Context, node string, vmid int) (domain.VirtualMachine, error) {
+	var config vmConfig
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config?current=1", url.PathEscape(node), vmid)
 	if err := c.getData(ctx, path, &config); err != nil {
 		return domain.VirtualMachine{}, err
@@ -103,20 +112,9 @@ func (c *Client) vmIdentity(ctx context.Context, node string, vmid int) (domain.
 	if config.Template != 0 {
 		return domain.VirtualMachine{}, domain.ErrInvalidInventory
 	}
-	var uuid string
-	for _, field := range strings.Split(config.SMBIOS, ",") {
-		key, value, ok := strings.Cut(field, "=")
-		if !ok || key != "uuid" {
-			continue
-		}
-		if uuid != "" || value == "" {
-			return domain.VirtualMachine{}, domain.ErrInvalidInventory
-		}
-		uuid = value
-	}
-	id, err := domain.ParseNodeID(uuid)
+	id, err := config.nodeID()
 	if err != nil {
-		return domain.VirtualMachine{}, domain.ErrInvalidInventory
+		return domain.VirtualMachine{}, err
 	}
 	return domain.VirtualMachine{Node: node, VMID: vmid, ID: id}, nil
 }

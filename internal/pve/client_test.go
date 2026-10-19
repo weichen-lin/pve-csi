@@ -2,6 +2,7 @@ package pve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,77 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 	"pve-csi.local/csi-plugin/internal/volume"
 )
+
+func TestStorageReadPermissionCombinations(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		grants                  []string
+		withoutOwner, withOwner bool
+		ownerReads              int
+	}{
+		{"none", nil, false, false, 0},
+		{"audit", []string{"Datastore.Audit"}, false, true, 1},
+		{"space", []string{"Datastore.AllocateSpace"}, false, false, 0},
+		{"allocate", []string{"Datastore.Allocate"}, false, false, 0},
+		{"audit and space", []string{"Datastore.Audit", "Datastore.AllocateSpace"}, false, true, 1},
+		{"audit and allocate", []string{"Datastore.Audit", "Datastore.Allocate"}, true, true, 0},
+		{"space and allocate", []string{"Datastore.AllocateSpace", "Datastore.Allocate"}, true, true, 0},
+		{"all", []string{"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"}, true, true, 0},
+	} {
+		for _, ownerAllowed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/owner=%t", tc.name, ownerAllowed), func(t *testing.T) {
+				reads := 0
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != "GET" || r.URL.Path != "/api2/json/access/permissions" {
+						t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+						w.WriteHeader(500)
+						return
+					}
+					path := r.URL.Query().Get("path")
+					grants := map[string]int{}
+					switch path {
+					case "/storage/pool":
+						for _, grant := range tc.grants {
+							grants[grant] = 0
+						}
+					case "/vms/7777":
+						reads++
+						if ownerAllowed {
+							grants["VM.Config.Disk"] = 0
+						}
+					default:
+						t.Errorf("unexpected permission path: %s", path)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{path: grants}})
+				}))
+				defer srv.Close()
+				g, err := NewStorageGateway(&Client{httpClient: srv.Client(), config: Config{Endpoint: srv.URL}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = g.checkReadAccess(context.Background(), domain.Placement{Node: "pve", Storage: "pool"}, 7777)
+				want := tc.withoutOwner
+				if ownerAllowed {
+					want = tc.withOwner
+				}
+				if (err == nil) != want || reads != tc.ownerReads {
+					t.Fatalf("access=%v owner reads=%d; want allowed=%t reads=%d", err, reads, want, tc.ownerReads)
+				}
+				if !want {
+					stepName, path := "check_storage_permissions", "/storage/pool"
+					if tc.ownerReads != 0 {
+						stepName, path = "check_owner_permissions", "/vms/7777"
+					}
+					var backend *volume.BackendError
+					var step *volume.StepError
+					if !errors.As(err, &backend) || backend.Kind() != volume.FailurePermissionDenied || !errors.As(err, &step) || step.Step() != stepName || step.Target() != path {
+						t.Fatalf("wrong permission failure: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestStorageErrorsReachCSI(t *testing.T) {
 	const secret = "fake-secret-must-not-leak"
@@ -83,7 +155,11 @@ func TestStorageErrorsReachCSI(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			service, err := volume.NewService(gateway, domain.Scope{Node: "pve", OwnerVMID: 7777})
+			attachments, err := NewAttachmentGateway(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service, err := volume.NewService(gateway, domain.Scope{Node: "pve", OwnerVMID: 7777}, attachments)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -133,7 +209,10 @@ func TestAllocationAuthorizationStaysInPVEAdapter(t *testing.T) {
 			name = "existing allocation needs no write permission"
 		}
 		t.Run(name, func(t *testing.T) {
-			req := domain.Request{Name: domain.ProvisioningName("retry"), Node: "pve", Storage: "pool", OwnerVMID: 7777, CapacityBytes: domain.GiB}
+			req, err := domain.NewRequest("retry", domain.Placement{Node: "pve", Storage: "pool"}, 7777, domain.GiB, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
 			permissionReads, writes := 0, 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet {
@@ -144,6 +223,10 @@ func TestAllocationAuthorizationStaysInPVEAdapter(t *testing.T) {
 				}
 				switch r.URL.Path {
 				case "/api2/json/access/permissions":
+					if r.URL.Query().Get("path") == "/nodes/pve" {
+						io.WriteString(w, `{"data":{"/nodes/pve":{"Sys.Audit":0}}}`)
+						return
+					}
 					permissionReads++
 					// New allocation initially has permission; it is revoked before
 					// the application reaches the explicit write permission check.
@@ -156,6 +239,8 @@ func TestAllocationAuthorizationStaysInPVEAdapter(t *testing.T) {
 					io.WriteString(w, `{"data":{"type":"lvmthin","content":"images","total":1073741824,"used":0,"avail":1073741824,"enabled":1,"active":1}}`)
 				case "/api2/json/nodes/pve/tasks":
 					io.WriteString(w, `{"data":[]}`)
+				case "/api2/json/cluster/nextid":
+					io.WriteString(w, `{"data":"7777"}`)
 				case "/api2/json/nodes/pve/storage/pool/content":
 					if existing {
 						fmt.Fprintf(w, `{"data":[{"volid":%q,"vmid":7777,"format":"raw","content":"images","size":1073741824}]}`, req.AllocationReference())
@@ -173,7 +258,11 @@ func TestAllocationAuthorizationStaysInPVEAdapter(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			service, err := volume.NewService(gateway, domain.Scope{Node: "pve", OwnerVMID: 7777})
+			attachments, err := NewAttachmentGateway(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service, err := volume.NewService(gateway, domain.Scope{Node: "pve", OwnerVMID: 7777}, attachments)
 			if err != nil {
 				t.Fatal(err)
 			}

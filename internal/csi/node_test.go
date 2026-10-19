@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"pve-csi.local/csi-plugin/internal/domain"
+	"pve-csi.local/csi-plugin/internal/linux"
 	"pve-csi.local/csi-plugin/internal/volume"
 )
 
@@ -21,7 +22,8 @@ func TestNodeRPCIdentitySurvivesRestart(t *testing.T) {
 	const uuid = "153a7c9e-588b-483f-884a-4eba01bc160a"
 	for range 2 {
 		func() {
-			node, err := NewNode(NodeConfig{DriverName: "example.csi", PVENode: "host-a"}, strings.ToUpper(uuid))
+			service, _ := volume.NewNodeService(linux.NewMountGateway("example.csi"), "host-a")
+			node, err := NewNode(NodeConfig{DriverName: "example.csi", PVENode: "host-a"}, strings.ToUpper(uuid), service)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,7 +46,7 @@ func TestNodeRPCIdentitySurvivesRestart(t *testing.T) {
 				t.Fatalf("NodeGetInfo = %v, %v", info, err)
 			}
 			caps, err := client.NodeGetCapabilities(ctx, &csi.NodeGetCapabilitiesRequest{})
-			if err != nil || len(caps.Capabilities) != 0 {
+			if err != nil || len(caps.Capabilities) != 1 || caps.Capabilities[0].GetRpc().GetType() != csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME {
 				t.Fatalf("Node capabilities = %v, %v", caps, err)
 			}
 			identity := csi.NewIdentityClient(conn)
@@ -61,8 +63,8 @@ func TestNodeRPCIdentitySurvivesRestart(t *testing.T) {
 					t.Fatal("Node advertised Controller service")
 				}
 			}
-			if _, err := client.NodePublishVolume(ctx, &csi.NodePublishVolumeRequest{}); status.Code(err) != codes.Unimplemented {
-				t.Fatalf("mount must remain unimplemented: %v", err)
+			if _, err := client.NodePublishVolume(ctx, &csi.NodePublishVolumeRequest{}); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("invalid mount request accepted: %v", err)
 			}
 			if _, err := csi.NewControllerClient(conn).ControllerGetCapabilities(ctx, &csi.ControllerGetCapabilitiesRequest{}); status.Code(err) != codes.Unimplemented {
 				t.Fatalf("Controller registered on Node: %v", err)

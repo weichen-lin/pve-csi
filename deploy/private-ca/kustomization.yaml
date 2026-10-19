@@ -1,0 +1,33 @@
+# Opt in only when PVE uses a private CA. Create pve-csi-ca separately.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: pve-csi-controller
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: pve-csi-controller
+      spec:
+        template:
+          spec:
+            containers:
+              - name: csi
+                env:
+                  - name: PVE_CA_FILE
+                    value: /etc/pve/ca.crt
+                volumeMounts:
+                  - name: pve-ca
+                    mountPath: /etc/pve
+                    readOnly: true
+            volumes:
+              - name: pve-ca
+                configMap:
+                  name: pve-csi-ca
+                  items:
+                    - key: ca.crt
+                      path: ca.crt

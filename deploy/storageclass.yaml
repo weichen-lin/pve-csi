@@ -11,7 +11,7 @@ reclaimPolicy: Delete
 volumeBindingMode: Immediate
 allowVolumeExpansion: false
 # Single PVE host placement. Registration reports the same topology.
-# A Bound PVC still cannot be mounted until attach/mount RPCs are implemented.
+# A Bound PVC has a disk; Pod scheduling triggers attachment and mounting.
 allowedTopologies:
   - matchLabelExpressions:
       - key: /pve-node

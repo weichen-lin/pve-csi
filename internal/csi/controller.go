@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -84,7 +82,7 @@ func (c *Controller) ControllerGetCapabilities(context.Context, *csi.ControllerG
 		Type: &csi.ControllerServiceCapability_Rpc{Rpc: &csi.ControllerServiceCapability_RPC{
 			Type: csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
 		}},
-	}}}, nil
+	}, {Type: &csi.ControllerServiceCapability_Rpc{Rpc: &csi.ControllerServiceCapability_RPC{Type: csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME}}}}}, nil
 }
 
 func (c *Controller) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
@@ -104,14 +102,40 @@ func (c *Controller) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequ
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
+func (c *Controller) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	if req == nil || req.NodeId == "" || req.Readonly || len(req.Secrets) != 0 || !supportedMountCapability(req.VolumeCapability) {
+		return nil, status.Error(codes.InvalidArgument, "volume_id, node_id and ext4 SINGLE_NODE_WRITER capability are required; read-only attachment and secrets are unsupported")
+	}
+	id, err := domain.ParseHandle(req.VolumeId)
+	if err != nil {
+		return nil, csiReadError(err)
+	}
+	serial, err := c.service.Publish(ctx, id, req.NodeId)
+	if err != nil {
+		return nil, csiReadError(err)
+	}
+	return &csi.ControllerPublishVolumeResponse{PublishContext: map[string]string{"serial": serial}}, nil
+}
+func (c *Controller) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+	if req == nil || len(req.Secrets) != 0 {
+		return nil, status.Error(codes.InvalidArgument, "volume_id is required; secrets are unsupported")
+	}
+	id, err := domain.ParseHandle(req.VolumeId)
+	if err != nil {
+		return nil, csiReadError(err)
+	}
+	if err := c.service.Unpublish(ctx, id, req.NodeId); err != nil {
+		return nil, csiReadError(err)
+	}
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
 func (c *Controller) volumeRequest(req *csi.CreateVolumeRequest) (domain.Request, error) {
 	invalid := func(message string) (domain.Request, error) {
 		return domain.Request{}, status.Error(codes.InvalidArgument, message)
 	}
-	if req == nil || req.Name == "" || len(req.Name) > 128 || !utf8.ValidString(req.Name) || strings.ContainsFunc(req.Name, func(r rune) bool {
-		return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r'
-	}) {
-		return invalid("name must be 1 to 128 bytes of valid UTF-8 without prohibited control characters")
+	if req == nil {
+		return invalid("create volume request is required")
 	}
 	if req.VolumeContentSource != nil || len(req.MutableParameters) != 0 || len(req.Secrets) != 0 {
 		return invalid("content sources, mutable parameters and per-request secrets are not supported")
@@ -140,15 +164,10 @@ func (c *Controller) volumeRequest(req *csi.CreateVolumeRequest) (domain.Request
 	if err := c.validateTopology(req.AccessibilityRequirements); err != nil {
 		return domain.Request{}, err
 	}
-	// Preserve every original byte (including allowed whitespace) while passing
-	// a safe name to the stricter backend. Keep this namespace stable on retry.
-	backendReq := domain.Request{
-		Name: domain.ProvisioningName(req.Name), Node: c.service.Scope().Node, Storage: storage,
-		OwnerVMID: c.service.Scope().OwnerVMID, CapacityBytes: capacity, CapacityLimitBytes: limit,
-	}
-	// A selected pool must produce a handle that subsequent reads can parse.
-	// Reject an oversized handle before any backend operation, not after POST.
-	if err := backendReq.Validate(); err != nil {
+	backendReq, err := domain.NewRequest(req.Name,
+		domain.Placement{Node: c.service.Scope().Node, Storage: storage},
+		c.service.Scope().OwnerVMID, capacity, limit)
+	if err != nil {
 		return invalid(err.Error())
 	}
 	return backendReq, nil
@@ -193,8 +212,7 @@ func (c *Controller) validateTopology(requirements *csi.TopologyRequirement) err
 	return nil
 }
 
-// Shared policy for creation and validation. This does not inspect a guest
-// filesystem or imply that Node/attachment support is already implemented.
+// Shared protocol policy; the Node application separately checks the actual filesystem.
 func supportedMountCapability(capability *csi.VolumeCapability) bool {
 	mount := capability.GetMount()
 	return mount != nil && capability.GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER &&

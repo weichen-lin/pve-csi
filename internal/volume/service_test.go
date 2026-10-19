@@ -57,13 +57,16 @@ func (s *storageStub) Delete(context.Context, domain.Identity) error {
 
 func volumeFixture(t *testing.T) (*Service, *storageStub, domain.Request, domain.Identity) {
 	t.Helper()
-	req := domain.Request{Name: domain.ProvisioningName("test"), Node: "pve", Storage: "pool", OwnerVMID: 7777, CapacityBytes: domain.GiB}
+	req, err := domain.NewRequest("test", domain.Placement{Node: "pve", Storage: "pool"}, 7777, domain.GiB, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id, err := domain.ParseHandle(req.Handle())
 	if err != nil {
 		t.Fatal(err)
 	}
 	storage := &storageStub{pool: domain.Pool{Enabled: true, Active: true, SupportsVolumes: true, AvailableBytes: 10 * domain.GiB}, ownerUnused: true}
-	service, err := NewService(storage, domain.Scope{Node: "pve", OwnerVMID: 7777})
+	service, err := NewService(storage, domain.Scope{Node: "pve", OwnerVMID: 7777}, &attachmentStub{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +134,7 @@ func TestDeletionPolicy(t *testing.T) {
 		unused      bool
 		cause, want error
 	}{
-		{"owner in use", false, nil, ErrOwnerInUse},
+		{"owner in use", false, nil, domain.ErrOwnerInUse},
 		{"owner lookup failed", true, context.DeadlineExceeded, context.DeadlineExceeded},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,4 +170,46 @@ func TestDeletionPolicy(t *testing.T) {
 			t.Fatal("expected one delete attempt")
 		}
 	})
+}
+
+func TestServiceRequiresAllGateways(t *testing.T) {
+	scope := domain.Scope{Node: "pve", OwnerVMID: 7777}
+	if _, err := NewService(nil, scope, &attachmentStub{}); err == nil {
+		t.Fatal("missing storage accepted")
+	}
+	if _, err := NewService(&storageStub{}, scope, nil); err == nil {
+		t.Fatal("missing attachment inspection accepted")
+	}
+}
+
+func TestStartupOwnerCheckDoesNotAuthorizeLaterWrites(t *testing.T) {
+	for _, operation := range []string{"create", "attach", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			s, storage, req, id := volumeFixture(t)
+			uuid, _ := domain.ParseNodeID("153a7c9e-588b-483f-884a-4eba01bc160a")
+			a := s.attachments.(*attachmentStub)
+			a.machines = []domain.VirtualMachine{{Node: "pve", VMID: 100, ID: uuid}}
+			if operation != "create" {
+				if _, err := s.EnsureVolume(context.Background(), req); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.CheckReservedOwner(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			storage.ownerUnused = false
+			before := storage.allocations
+			var err error
+			if operation == "create" {
+				_, err = s.EnsureVolume(context.Background(), req)
+			} else if operation == "attach" {
+				_, err = s.Publish(context.Background(), id, uuid.String())
+			} else {
+				err = s.DeleteVolume(context.Background(), id)
+			}
+			if !errors.Is(err, domain.ErrOwnerInUse) || storage.allocations != before || a.attaches != 0 || storage.deletions != 0 {
+				t.Fatalf("reserved owner reused: %v", err)
+			}
+		})
+	}
 }

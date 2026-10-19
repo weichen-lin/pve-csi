@@ -9,9 +9,6 @@ resources:
 configMapGenerator:
   - name: pve-csi-config
     envs: [config.env]
-images:
-  - name: pve-csi
-    newTag: dev-011
 replacements:
   - source:
       kind: ConfigMap
@@ -30,13 +27,6 @@ replacements:
         options:
           delimiter: /
           index: 5
-      - select:
-          kind: DaemonSet
-        fieldPaths:
-          - spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms.0.matchExpressions.0.key
-        options:
-          delimiter: /
-          index: 0
   - source:
       kind: ConfigMap
       name: pve-csi-config

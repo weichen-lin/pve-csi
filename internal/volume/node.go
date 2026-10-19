@@ -2,7 +2,6 @@ package volume
 
 import (
 	"context"
-	"errors"
 
 	"pve-csi.local/csi-plugin/internal/domain"
 )
@@ -15,34 +14,19 @@ type NodeInventory interface {
 	VirtualMachines(context.Context, string) ([]domain.VirtualMachine, error)
 }
 
-type NodeResolver struct {
-	inventory NodeInventory
-	node      string
-}
-
-func NewNodeResolver(inventory NodeInventory, node string) (*NodeResolver, error) {
-	if inventory == nil || !domain.ValidNodeName(node) {
-		return nil, errors.New("node resolver requires an inventory and valid PVE node")
-	}
-	return &NodeResolver{inventory: inventory, node: node}, nil
-}
-
-// Resolve observes identity afresh. It does not authorize attachment or lock a VM.
-func (r *NodeResolver) Resolve(ctx context.Context, rawID string) (domain.VirtualMachine, error) {
+// resolveNode always observes current VM identities; it never caches a match.
+// Publish validates and parses the raw UUID before any backend reads.
+func (s *Service) resolveNode(ctx context.Context, id domain.NodeID) (domain.VirtualMachine, error) {
 	if err := ctx.Err(); err != nil {
-		return domain.VirtualMachine{}, AtStep("resolve_node", r.node, err)
+		return domain.VirtualMachine{}, AtStep("resolve_node", s.scope.Node, err)
 	}
-	id, err := domain.ParseNodeID(rawID)
-	if err != nil {
-		return domain.VirtualMachine{}, AtStep("validate_node_id", "node", err)
-	}
-	machines, err := r.inventory.VirtualMachines(ctx, r.node)
+	machines, err := s.attachments.VirtualMachines(ctx, s.scope.Node)
 	if err != nil {
 		return domain.VirtualMachine{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return domain.VirtualMachine{}, AtStep("resolve_node", r.node, err)
+		return domain.VirtualMachine{}, AtStep("resolve_node", s.scope.Node, err)
 	}
-	vm, err := domain.MatchNode(r.node, id, machines)
-	return vm, AtStep("resolve_node", r.node+"/"+id.String(), err)
+	vm, err := domain.MatchNode(s.scope.Node, id, machines)
+	return vm, AtStep("resolve_node", s.scope.Node+"/"+id.String(), err)
 }

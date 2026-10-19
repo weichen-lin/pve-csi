@@ -153,7 +153,8 @@ func (s *Identity) GetPluginCapabilities(context.Context, *csi.GetPluginCapabili
 }
 
 func (s *Identity) Probe(context.Context, *csi.ProbeRequest) (*csi.ProbeResponse, error) {
-	// Registration follows configuration validation. This reports initialization
+	// Production registration follows configuration and adapter startup checks.
+	// This reports initialization
 	// only: it does not claim PVE connectivity or provisioner readiness.
 	return &csi.ProbeResponse{Ready: wrapperspb.Bool(true)}, nil
 }

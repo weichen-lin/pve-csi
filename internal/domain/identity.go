@@ -20,15 +20,18 @@ func ValidNodeName(value string) bool {
 
 func ValidStorageID(value string) bool { return storagePattern.MatchString(value) }
 
-// ProvisioningName preserves the established v1 namespace and original bytes.
-// Filename deliberately applies a second hash; changing either breaks retries.
-func ProvisioningName(original string) string {
+func ValidVMID(value int) bool { return value >= 100 && value <= 999999999 }
+
+// NameDigest is safe for logging without revealing the original request name.
+// It is also the internal v1 namespace used when deriving a disk identity.
+func NameDigest(original string) string {
 	digest := sha256.Sum256([]byte(original))
 	return fmt.Sprintf("csi-v1-%x", digest)
 }
 
 func (r Request) Filename() string {
-	digest := sha256.Sum256([]byte(r.Name))
+	// Preserve the established v1 identity, including its two hashing steps.
+	digest := sha256.Sum256([]byte(NameDigest(r.name)))
 	return fmt.Sprintf("vm-%d-csi-%x", r.OwnerVMID, digest)
 }
 
@@ -52,7 +55,7 @@ func (s Scope) Validate() error {
 	if !ValidNodeName(s.Node) {
 		return errors.New("invalid PVE node name")
 	}
-	if s.OwnerVMID < 100 || s.OwnerVMID > 999999999 {
+	if !ValidVMID(s.OwnerVMID) {
 		return errors.New("owner VMID must be from 100 to 999999999")
 	}
 	// v1:<node>:<storage>:vm-<owner>-csi-<sha256>; shortest storage ID is 2 bytes.
@@ -62,7 +65,7 @@ func (s Scope) Validate() error {
 	return nil
 }
 
-var filenamePattern = regexp.MustCompile(`^vm-([1-9][0-9]{2,8})-csi-[0-9a-f]{64}$`)
+var filenamePattern = regexp.MustCompile(`^vm-([1-9][0-9]*)-csi-[0-9a-f]{64}$`)
 
 // Identity is the canonical v1 locator, not proof of backend ownership.
 // The original provisioning name cannot be recovered from its digest.
@@ -86,7 +89,7 @@ func ParseHandle(raw string) (Identity, error) {
 		return Identity{}, ErrInvalidHandle
 	}
 	owner, err := strconv.Atoi(match[1])
-	if err != nil {
+	if err != nil || !ValidVMID(owner) {
 		return Identity{}, ErrInvalidHandle
 	}
 	return Identity{id: raw, placement: Placement{Node: parts[1], Storage: parts[2]}, owner: owner, filename: parts[3]}, nil

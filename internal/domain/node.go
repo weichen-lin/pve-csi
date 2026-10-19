@@ -26,10 +26,19 @@ func ParseNodeID(raw string) (NodeID, error) {
 
 func (id NodeID) String() string { return id.uuid }
 
+// VirtualMachine is a non-template VM candidate with a guest UUID.
+// References from containers/templates are represented by ReferenceSource.
 type VirtualMachine struct {
 	Node string
 	VMID int
 	ID   NodeID
+}
+
+func (vm VirtualMachine) Validate() error {
+	if !ValidNodeName(vm.Node) || !ValidVMID(vm.VMID) || vm.ID == (NodeID{}) {
+		return ErrInvalidInventory
+	}
+	return nil
 }
 
 // MatchNode requires a complete observation. A first match alone is not proof
@@ -45,7 +54,7 @@ func MatchNode(node string, id NodeID, machines []VirtualMachine) (VirtualMachin
 	var match VirtualMachine
 	count := 0
 	for _, vm := range machines {
-		if vm.Node != node || vm.VMID < 100 || vm.VMID > 999999999 || vm.ID.uuid == "" || seen[vm.VMID] {
+		if vm.Node != node || vm.Validate() != nil || seen[vm.VMID] {
 			return VirtualMachine{}, ErrInvalidInventory
 		}
 		seen[vm.VMID] = true

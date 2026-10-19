@@ -3,8 +3,8 @@ package domain
 import (
 	"errors"
 	"math"
-	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Request is a command payload, not a confirmed Volume. Validate it before IO.
@@ -12,12 +12,22 @@ import (
 // The operator must reserve it and keep it stable across retries: PVE uses the
 // owner for permissions and VM disk cleanup.
 type Request struct {
-	Name               string
+	name               string
 	Node               string
 	Storage            string
 	OwnerVMID          int
 	CapacityBytes      int64
 	CapacityLimitBytes int64
+}
+
+// NewRequest accepts the original name, never a pre-hashed backend name.
+// Identity derivation belongs here so all callers use the same retry key.
+func NewRequest(name string, placement Placement, owner int, capacity, limit int64) (Request, error) {
+	r := Request{name: name, Node: placement.Node, Storage: placement.Storage, OwnerVMID: owner, CapacityBytes: capacity, CapacityLimitBytes: limit}
+	if err := r.Validate(); err != nil {
+		return Request{}, err
+	}
+	return r, nil
 }
 
 type Placement struct {
@@ -53,9 +63,7 @@ func Confirm(req Request, observed Allocation) (Volume, error) {
 }
 
 func (v Volume) ID() string            { return v.id }
-func (v Volume) Reference() string     { return v.allocation.Reference }
 func (v Volume) Placement() Placement  { return v.allocation.Placement }
-func (v Volume) OwnerVMID() int        { return v.allocation.OwnerVMID }
 func (v Volume) CapacityBytes() int64  { return v.allocation.CapacityBytes }
 func (r Request) Placement() Placement { return Placement{Node: r.Node, Storage: r.Storage} }
 
@@ -67,8 +75,13 @@ func (r Request) CapacityLimit() int64 {
 }
 
 func (r Request) Validate() error {
-	if r.Name == "" || len(r.Name) > 128 || strings.TrimSpace(r.Name) != r.Name || strings.ContainsFunc(r.Name, unicode.IsControl) {
-		return errors.New("volume name must be 1 to 128 bytes without control characters or surrounding whitespace")
+	if r.name == "" || len(r.name) > 128 || !utf8.ValidString(r.name) {
+		return ErrInvalidName
+	}
+	for _, r := range r.name {
+		if unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r' {
+			return ErrInvalidName
+		}
 	}
 	if err := (Scope{Node: r.Node, OwnerVMID: r.OwnerVMID}).Validate(); err != nil {
 		return err
@@ -121,6 +134,7 @@ func NormalizeCapacity(required, upper int64, specified bool) (int64, int64, err
 }
 
 var (
+	ErrInvalidName        = errors.New("volume name must be 1 to 128 bytes of valid UTF-8 without prohibited control characters")
 	ErrCapacity           = errors.New("requested volume exceeds storage available capacity")
 	ErrStorage            = errors.New("unsupported volume storage")
 	ErrPoolDisabled       = errors.New("storage pool is disabled")

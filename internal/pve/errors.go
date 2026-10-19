@@ -57,8 +57,12 @@ func mapError(err error) error {
 	if err == nil {
 		return nil
 	}
+	var classified *volume.BackendError
+	if errors.As(err, &classified) {
+		return err
+	}
 	kind := volume.FailureInternal
-	hint := ""
+	hint := "PVE returned an invalid or unexpected response"
 	var httpErr *HTTPError
 	if errors.Is(err, ErrStorageNotFound) {
 		kind = volume.FailureNotFound
@@ -67,13 +71,17 @@ func mapError(err error) error {
 		switch httpErr.StatusCode {
 		case http.StatusUnauthorized:
 			kind = volume.FailureUnauthenticated
+			hint = "PVE authentication failed; check PVE_TOKEN_ID and PVE_TOKEN_SECRET"
 		case http.StatusForbidden:
 			kind = volume.FailurePermissionDenied
+			hint = "PVE denied the operation; check both user and token permissions"
 		case http.StatusNotFound:
 			kind = volume.FailureNotFound
+			hint = "PVE resource was not found; check the node and storage names"
 		default:
 			if httpErr.StatusCode == http.StatusTooManyRequests || httpErr.StatusCode >= 500 {
 				kind = volume.FailureUnavailable
+				hint = "PVE is unavailable; check network connectivity and PVE service status"
 			}
 		}
 	} else {

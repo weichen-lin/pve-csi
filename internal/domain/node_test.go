@@ -2,9 +2,32 @@ package domain
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+func TestVMIDBoundaries(t *testing.T) {
+	id, _ := ParseNodeID("153a7c9e-588b-483f-884a-4eba01bc160a")
+	for _, tc := range []struct {
+		vmid  int
+		valid bool
+	}{
+		{-1, false}, {0, false}, {99, false}, {100, true}, {7777, true}, {999999999, true}, {1000000000, false},
+	} {
+		ownerErr := (Scope{Node: "pve", OwnerVMID: tc.vmid}).Validate()
+		vmErr := (VirtualMachine{Node: "pve", VMID: tc.vmid, ID: id}).Validate()
+		_, handleErr := ParseHandle("v1:pve:pool:vm-" + strconv.Itoa(tc.vmid) + "-csi-" + strings.Repeat("a", 64))
+		if (ownerErr == nil) != tc.valid || (vmErr == nil) != tc.valid || (handleErr == nil) != tc.valid {
+			t.Errorf("VMID %d: owner=%v VM=%v handle=%v; want valid=%t", tc.vmid, ownerErr, vmErr, handleErr, tc.valid)
+		}
+	}
+	for _, raw := range []string{"0100", "+100", "100.0", "99999999999999999999"} {
+		if _, err := ParseHandle("v1:pve:pool:vm-" + raw + "-csi-" + strings.Repeat("a", 64)); !errors.Is(err, ErrInvalidHandle) {
+			t.Errorf("accepted invalid handle owner %q: %v", raw, err)
+		}
+	}
+}
 
 func TestNodeIdentity(t *testing.T) {
 	const uuid = "153a7c9e-588b-483f-884a-4eba01bc160a"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 
 	"pve-csi.local/csi-plugin/internal/domain"
@@ -11,20 +12,22 @@ import (
 
 // Service owns one in-flight guard per controller instance.
 type Service struct {
-	storage  StorageGateway
-	scope    domain.Scope
-	mu       sync.Mutex
-	inFlight map[string]struct{}
+	storage     StorageGateway
+	attachments AttachmentGateway
+	scope       domain.Scope
+	mu          sync.Mutex
+	vmMu        sync.Mutex
+	inFlight    map[string]struct{}
 }
 
-func NewService(storage StorageGateway, scope domain.Scope) (*Service, error) {
-	if storage == nil {
-		return nil, errors.New("provisioning requires a storage gateway")
+func NewService(storage StorageGateway, scope domain.Scope, attachments AttachmentGateway) (*Service, error) {
+	if storage == nil || attachments == nil {
+		return nil, errors.New("volume service requires storage and attachment gateways")
 	}
 	if err := scope.Validate(); err != nil {
 		return nil, err
 	}
-	return &Service{storage: storage, scope: scope, inFlight: make(map[string]struct{})}, nil
+	return &Service{storage: storage, attachments: attachments, scope: scope, inFlight: make(map[string]struct{})}, nil
 }
 
 func (s *Service) Scope() domain.Scope { return s.scope }
@@ -52,6 +55,9 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 		return domain.Volume{}, AtStep("check_storage_status", target, err)
 	}
 	if err := s.storage.CheckIdle(ctx, req.Placement(), req.OwnerVMID); err != nil {
+		return domain.Volume{}, err
+	}
+	if err := s.CheckReservedOwner(ctx); err != nil {
 		return domain.Volume{}, err
 	}
 	if existing, found, err := s.observe(ctx, req); err != nil {
@@ -102,6 +108,23 @@ func (s *Service) release(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.inFlight, id)
+}
+
+// CheckReservedOwner is shared by startup and write workflows. Always observe
+// current ownership: successful startup never authorizes a later operation.
+func (s *Service) CheckReservedOwner(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	target := strconv.Itoa(s.scope.OwnerVMID)
+	unused, err := s.storage.OwnerUnused(ctx, s.scope.OwnerVMID)
+	if err != nil {
+		return AtStep("check_reserved_owner", target, err)
+	}
+	if !unused {
+		return AtStep("check_reserved_owner", target, domain.ErrOwnerInUse)
+	}
+	return nil
 }
 
 func (s *Service) observe(ctx context.Context, req domain.Request) (domain.Volume, bool, error) {

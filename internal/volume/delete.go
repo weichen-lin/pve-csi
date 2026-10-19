@@ -21,6 +21,10 @@ func (s *Service) DeleteVolume(ctx context.Context, id domain.Identity) error {
 		return ErrBusy
 	}
 	defer s.release(id.ID())
+	if !s.vmMu.TryLock() {
+		return ErrBusy
+	}
+	defer s.vmMu.Unlock()
 	pool, err := s.storage.InspectPool(ctx, id.Placement(), id.OwnerVMID())
 	if err != nil {
 		return err
@@ -44,12 +48,15 @@ func (s *Service) DeleteVolume(ctx context.Context, id domain.Identity) error {
 	if err := s.storage.CheckDeletionPermission(ctx, id.Placement()); err != nil {
 		return AtStep("check_deletion_permission", id.Reference(), err)
 	}
-	unused, err := s.storage.OwnerUnused(ctx, id.OwnerVMID())
-	if err != nil {
-		return AtStep("check_deletion_owner", id.Reference(), err)
+	if err := s.CheckReservedOwner(ctx); err != nil {
+		return err
 	}
-	if !unused {
-		return AtStep("check_deletion_owner", id.Reference(), ErrOwnerInUse)
+	refs, err := s.attachments.References(ctx, id)
+	if err != nil {
+		return AtStep("check_deletion_references", id.Reference(), err)
+	}
+	if err := refs.CheckDelete(); err != nil {
+		return AtStep("check_deletion_references", id.Reference(), err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

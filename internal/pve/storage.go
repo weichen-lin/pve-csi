@@ -61,20 +61,26 @@ func (g *StorageGateway) checkReadAccess(ctx context.Context, placement domain.P
 	if err != nil {
 		return volume.AtStep("check_storage_permissions", path, mapError(err))
 	}
-	// Content/status endpoints require Audit or AllocateSpace. Individual disk
-	// visibility additionally requires Allocate OR (Audit AND VM.Config.Disk).
-	if !permissions.Audit && !permissions.AllocateSpace || !permissions.Allocate && !permissions.Audit {
+	// First check access to the pool's status and content endpoints.
+	canReadPool := permissions.Audit || permissions.AllocateSpace
+	if !canReadPool {
 		return volume.AtStep("check_storage_permissions", path, missingPrivilege(path, "Datastore.Audit"))
 	}
-	if !permissions.Allocate {
-		path = "/vms/" + strconv.Itoa(owner)
-		allowed, err := g.client.CanConfigureDisk(ctx, owner)
-		if err != nil {
-			return volume.AtStep("check_owner_permissions", path, mapError(err))
-		}
-		if !allowed {
-			return volume.AtStep("check_owner_permissions", path, missingPrivilege(path, "VM.Config.Disk"))
-		}
+	// Allocate permits seeing every disk. Otherwise visibility requires BOTH
+	// storage Audit and VM.Config.Disk on the reserved owner.
+	if permissions.Allocate {
+		return nil
+	}
+	if !permissions.Audit {
+		return volume.AtStep("check_storage_permissions", path, missingPrivilege(path, "Datastore.Audit"))
+	}
+	path = "/vms/" + strconv.Itoa(owner)
+	canReadOwnerDisks, err := g.client.CanConfigureDisk(ctx, owner)
+	if err != nil {
+		return volume.AtStep("check_owner_permissions", path, mapError(err))
+	}
+	if !canReadOwnerDisks {
+		return volume.AtStep("check_owner_permissions", path, missingPrivilege(path, "VM.Config.Disk"))
 	}
 	return nil
 }
@@ -169,23 +175,12 @@ func (g *StorageGateway) Delete(ctx context.Context, id domain.Identity) error {
 	taskCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	taskID := strconv.Itoa(id.OwnerVMID()) + "@" + placement.Storage
-	for {
-		task, err := g.client.DeletionStatus(taskCtx, placement.Node, upid, taskID)
-		if err != nil {
-			return volume.AtStep("wait_deletion_task", id.Reference(), errors.Join(volume.ErrDeleteUnconfirmed, mapError(err)))
-		}
-		if task.Status == "stopped" {
-			if task.ExitStatus != "OK" {
-				return volume.AtStep("wait_deletion_task", id.Reference(), volume.ErrDeleteFailed)
-			}
-			return nil
-		}
-		timer := time.NewTimer(500 * time.Millisecond)
-		select {
-		case <-taskCtx.Done():
-			timer.Stop()
-			return volume.AtStep("wait_deletion_task", id.Reference(), errors.Join(volume.ErrDeleteUnconfirmed, taskCtx.Err()))
-		case <-timer.C:
-		}
+	exit, err := g.client.waitTask(taskCtx, placement.Node, upid, "imgdel", taskID)
+	if err != nil {
+		return volume.AtStep("wait_deletion_task", id.Reference(), errors.Join(volume.ErrDeleteUnconfirmed, mapError(err)))
 	}
+	if exit != "OK" {
+		return volume.AtStep("wait_deletion_task", id.Reference(), volume.ErrDeleteFailed)
+	}
+	return nil
 }
