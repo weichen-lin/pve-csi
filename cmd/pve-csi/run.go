@@ -22,11 +22,14 @@ import (
 
 func Run(ctx context.Context, out, usage io.Writer, getenv func(string) string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("command required: controller, node or probe; use --help")
+		return errors.New("command required: controller, node, probe or check; use --help")
 	}
 	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		_, err := fmt.Fprintln(out, "Usage: pve-csi <controller|node|probe> [--endpoint unix:///path/to/csi.sock]\nUse the command with --help for flags.")
+		_, err := fmt.Fprintln(out, "Usage: pve-csi <controller|node|probe> [--endpoint unix:///path/to/csi.sock]\n       pve-csi check\nCheck settings come from .env or environment variables. Use the command with --help for details.")
 		return err
+	}
+	if args[0] == "check" {
+		return runCheck(ctx, out, usage, getenv, args[1:])
 	}
 	if args[0] != "controller" && args[0] != "node" && args[0] != "probe" {
 		return fmt.Errorf("unknown command %q; use --help", args[0])

@@ -57,11 +57,7 @@ jobs:
         with:
           version: v4.3.1
       - name: Check Helm chart
-        run: |
-          helm lint charts/pve-csi --strict --kube-version 1.34.0 -f charts/pve-csi/ci/values.yaml
-          helm template pve-csi charts/pve-csi --kube-version 1.34.0 -f charts/pve-csi/ci/values.yaml > /dev/null
-          helm template pve-csi charts/pve-csi --kube-version 1.34.0 -f charts/pve-csi/ci/values.yaml \
-            --set pve.caConfigMap=example-pve-ca --set storageClass.create=false > /dev/null
+        run: bash .github/scripts/check-helm.sh
 
   publish:
     name: Publish image

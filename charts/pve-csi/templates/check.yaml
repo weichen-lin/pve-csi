@@ -1,0 +1,110 @@
+{{- if .Values.check.enabled }}
+{{- /* Values files decode numbers as float64; print integers explicitly to avoid 1e+06. */}}
+{{- $vmids := list }}
+{{- range .Values.check.vmids }}
+{{- $vmids = append $vmids (int64 . | toString) }}
+{{- end }}
+# Template for on-demand read-only checks. Suspended: it never runs on a schedule.
+# Start one with kubectl create job --from=cronjob/...
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    {{- include "pve-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: check
+  name: {{ include "pve-csi.checkName" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  suspend: true
+  # Required by the API but unused while suspended.
+  schedule: "0 0 1 1 *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+        app.kubernetes.io/component: check
+    spec:
+      # One attempt per request; retries would only scatter the same report.
+      backoffLimit: 0
+      ttlSecondsAfterFinished: {{ int64 .Values.check.ttlSecondsAfterFinished }}
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name | quote }}
+            app.kubernetes.io/component: check
+        spec:
+          restartPolicy: Never
+          # The check talks only to PVE, never to the Kubernetes API.
+          automountServiceAccountToken: false
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          nodeSelector:
+            {{- toYaml .Values.nodeSelector | nindent 12 }}
+          tolerations:
+            {{- toYaml .Values.tolerations | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: check
+              image: {{ include "pve-csi.image" . | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              args: [check]
+              env:
+                - name: PVE_ENDPOINT
+                  value: {{ .Values.pve.endpoint | quote }}
+                - name: PVE_NODE
+                  value: {{ .Values.pve.node | quote }}
+                - name: PVE_OWNER_VMID
+                  value: {{ int64 .Values.pve.ownerVMID | toString | quote }}
+                - name: PVE_STORAGE
+                  value: {{ .Values.storageClass.storage | quote }}
+                - name: PVE_VMIDS
+                  value: {{ join "," $vmids | quote }}
+                - name: PVE_CHECK_TIMEOUT
+                  value: {{ .Values.check.timeout | quote }}
+                {{- if .Values.pve.caConfigMap }}
+                - name: PVE_CA_FILE
+                  value: /etc/pve/ca.crt
+                {{- end }}
+                - name: PVE_TOKEN_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.pve.existingSecret | quote }}
+                      key: PVE_TOKEN_ID
+                - name: PVE_TOKEN_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.pve.existingSecret | quote }}
+                      key: PVE_TOKEN_SECRET
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                {{- toYaml .Values.check.resources | nindent 16 }}
+              {{- if .Values.pve.caConfigMap }}
+              volumeMounts:
+                - name: pve-ca
+                  mountPath: /etc/pve
+                  readOnly: true
+              {{- end }}
+          {{- if .Values.pve.caConfigMap }}
+          volumes:
+            - name: pve-ca
+              configMap:
+                name: {{ .Values.pve.caConfigMap | quote }}
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+          {{- end }}
+{{- end }}

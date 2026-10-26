@@ -8,3 +8,13 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- define "pve-csi.image" -}}
 {{ printf "%s:%s" .Values.image.repository .Values.image.tag }}
 {{- end }}
+
+{{- /* CronJob names are limited to 52 characters. Preserve existing short names. */ -}}
+{{- define "pve-csi.checkName" -}}
+{{- $name := printf "%s-check" .Release.Name -}}
+{{- if le (len $name) 52 -}}
+{{- $name -}}
+{{- else -}}
+{{- printf "%s-%s-check" (.Release.Name | trunc 37 | trimAll ".-") (.Release.Name | sha256sum | trunc 8) -}}
+{{- end -}}
+{{- end }}

@@ -29,6 +29,22 @@ func LoadNodeConfig(getenv func(string) string) (csidriver.NodeConfig, error) {
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
+	cfg, err := loadPVEConfig(getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Controller = csidriver.Config{
+		DriverName: strings.TrimSpace(getenv("CSI_DRIVER_NAME")),
+	}
+	if err := cfg.Controller.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// Read-only checks share controller connection/scope configuration without a
+// CSI driver name or a running CSI service.
+func loadPVEConfig(getenv func(string) string) (Config, error) {
 	connection, err := (pve.Config{
 		Endpoint: getenv("PVE_ENDPOINT"), TokenID: getenv("PVE_TOKEN_ID"),
 		TokenSecret: getenv("PVE_TOKEN_SECRET"), CAFile: getenv("PVE_CA_FILE"),
@@ -41,15 +57,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if !ownerVMIDPattern.MatchString(owner) || err != nil || !domain.ValidVMID(vmid) {
 		return Config{}, errors.New("PVE_OWNER_VMID is required and must be an integer from 100 to 999999999 without leading zeros")
 	}
-	controller := csidriver.Config{
-		DriverName: strings.TrimSpace(getenv("CSI_DRIVER_NAME")),
-	}
-	if err := controller.Validate(); err != nil {
-		return Config{}, err
-	}
 	scope := domain.Scope{Node: strings.TrimSpace(getenv("PVE_NODE")), OwnerVMID: vmid}
 	if err := scope.Validate(); err != nil {
 		return Config{}, fmt.Errorf("invalid PVE_NODE or PVE_OWNER_VMID: %w", err)
 	}
-	return Config{Connection: connection, Controller: controller, Scope: scope}, nil
+	return Config{Connection: connection, Scope: scope}, nil
 }

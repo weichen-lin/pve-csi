@@ -57,3 +57,18 @@ storageClass:
   reclaimPolicy: Delete
   volumeBindingMode: Immediate
   defaultClass: false
+
+# Optional suspended CronJob used as a template for on-demand read-only PVE checks.
+# It never runs by itself; start a Job from it with kubectl.
+check:
+  enabled: false
+  # Required when enabled. PVE VMIDs of the Kubernetes node VMs, e.g. [100, 101].
+  vmids: []
+  # Upper bound for the whole check, e.g. 60s or 2m.
+  timeout: 60s
+  # Seconds after completion until a Job is eligible for TTL cleanup (1 day).
+  # Only one successful and one failed Job are kept; older Jobs/logs may disappear sooner.
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {memory: 128Mi}

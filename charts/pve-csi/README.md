@@ -4,6 +4,8 @@ Installs one Controller Pod (CSI driver, provisioner, attacher) and one Node Pod
 
 Requirements: a single PVE host, LVM-thin storage, Linux amd64 VMs with kernel 5.12 or newer, the standard `/var/lib/kubelet` directory, unique SMBIOS UUIDs, VirtIO SCSI, and disk hotplug. The default sidecars require Kubernetes 1.34 or newer. Supported volumes use ext4 and ReadWriteOnce. Complete [PVE setup](../../PVE-SETUP.md) first.
 
+Before deploying, run the read-only [`pve-csi check`](../../CHECK.md) locally with the intended CSI token, storage ID, and Kubernetes VMIDs to check PVE permissions and readiness. After deploying, the same check can run inside the cluster on demand; see [On-demand PVE check](#on-demand-pve-check).
+
 ## Configure your installation
 
 Keep your environment settings in your deployment repository. [values.yaml](values.yaml) includes concrete examples: replace the image version, PVE URL, host, reserved owner number, Secret name, and storage ID with your own settings. Other values can keep their defaults. Optional fields explain what leaving them empty means.
@@ -84,40 +86,65 @@ spec:
 
 The chart sets the StorageClass provisioner to `driverName`, fixes the filesystem to ext4, disables expansion, and restricts topology to `pve.node`. LVM-thin is the PVE storage backend; ext4 is the filesystem inside each disk. See [Kubernetes StorageClasses](https://kubernetes.io/docs/concepts/storage/storage-classes/).
 
-## Use with Argo CD and control versions
+## Install and control versions
 
-Add these fields to your existing Application and put your environment values under `source.helm.valuesObject`, or use your existing values-file workflow:
+Use a checkout of the Git tag whose image CI has published, and save your installation settings in `my-values.yaml`, including the matching `image.tag`. Create the target namespace before creating the token Secret and optional CA ConfigMap referenced by those settings:
 
-```yaml
-spec:
-  source:
-    repoURL: https://github.com/weichen-lin/pve-csi.git
-    targetRevision: v0.1.0
-    path: charts/pve-csi
-    helm:
-      valuesObject:
-        image:
-          tag: v0.1.0
-        # Add your pve and storageClass settings here.
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: pve-csi
-  syncPolicy:
-    syncOptions:
-      - CreateNamespace=true
+```sh
+kubectl create namespace pve-csi
 ```
 
-This is an Application fragment; keep your existing metadata and project. The destination above targets the cluster running Argo CD. The Git revision must contain `charts/pve-csi`, and the image tag must already exist.
+The namespace must permit privileged Node Pods and host mounts. After preparing the Secret and any ConfigMap, run Helm from the repository root:
+
+```sh
+helm upgrade --install pve-csi charts/pve-csi --namespace pve-csi -f my-values.yaml
+```
+
+This installs or upgrades the `pve-csi` release. The chart does not create the namespace, token Secret, or CA ConfigMap.
 
 | Version | Controls |
 | --- | --- |
-| `source.targetRevision` | Git tag or commit from which Argo CD reads the chart. |
+| Git checkout | The chart templates and defaults used by the Helm command. |
 | `image.tag` | CSI application image run by the Pods, using the corresponding published Git tag. |
 | `Chart.yaml` → `version` | Chart package version; it does not select the Git revision or application image. |
 
-For a release, push a new Git tag, wait for CI to publish its image with the same tag, update the deployment repository's Git revision and image tag, then sync Argo CD. Keep published release tags unchanged. Pull requests and pushes to main run checks only; image builds and publication run only on tag pushes after checks pass.
+For a release, push a new Git tag and wait for CI to publish its image with the same tag. Deploy from that checkout, update `image.tag` in your values file, and rerun the Helm command. Keep published release tags unchanged. Pull requests and pushes to main run checks only; image builds and publication run only on tag pushes after checks pass.
 
-The AppProject must allow the required Namespace, ClusterRole, ClusterRoleBinding, CSIDriver, StorageClass, Deployment, DaemonSet, and ServiceAccount resources. The target namespace must permit privileged Node Pods and host mounts. This chart does not create the namespace; create it before any prerequisite Secret or ConfigMap. Do not manage the same installation with both Argo CD and manual `helm upgrade` commands.
+## On-demand PVE check
+
+Set `check.enabled: true` to install a suspended CronJob. It never runs on a schedule; it only stores the image, PVE settings, token Secret reference, and CA settings so that you can start a one-off read-only [`pve-csi check`](../../CHECK.md) from inside the cluster. Its name is `<release>-check` for release names up to 46 characters; longer names use a shortened prefix and a hash to stay within the CronJob's 52-character limit.
+
+```yaml
+check:
+  enabled: true
+  vmids: [100, 101]
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `check.enabled` | Installs the suspended CronJob. Default `false`. |
+| `check.vmids` | Required when enabled. PVE VMIDs of the Kubernetes node VMs. Update this list when node VMs are added or replaced; an outdated list only fails the check, never the CSI driver. |
+| `check.timeout` | Upper bound for the whole check, such as `60s` or `2m`. |
+| `check.ttlSecondsAfterFinished` | Seconds after completion until a Job is eligible for TTL cleanup. Default `86400` (one day); history cleanup can delete it sooner. |
+
+The check uses `pve.endpoint`, `pve.node`, `pve.ownerVMID`, `pve.existingSecret`, `pve.caConfigMap`, and `storageClass.storage`, so `storageClass.storage` must be set even when `storageClass.create` is false. The check Pod does not receive a Kubernetes API token.
+
+For the `pve-csi` release, start a check with `kubectl`, using a new Job name each time:
+
+```sh
+kubectl -n pve-csi create job pve-csi-check-001 --from=cronjob/pve-csi-check
+kubectl -n pve-csi logs -f job/pve-csi-check-001
+```
+
+For another release, find its CronJob by labels, replacing `pve-csi` in the instance label with your release name:
+
+```sh
+kubectl -n pve-csi get cronjob -l 'app.kubernetes.io/instance=pve-csi,app.kubernetes.io/component=check' -o jsonpath='{.items[0].metadata.name}{"\n"}'
+```
+
+Use the returned name after `--from=cronjob/`. Each Job runs once without retries and succeeds only when all required checks pass. A failed check does not affect the running Controller or Node Pods.
+
+The CronJob retains at most one successful and one failed Job. Completing another check with the same outcome can delete the earlier Job and its Pod logs before its TTL expires. TTL makes a finished Job eligible for cleanup; it guarantees neither a minimum retention period nor an exact deletion time.
 
 ## What `.Release.Name` means
 
@@ -133,7 +160,7 @@ For an installation named `pve-csi`, this becomes:
 app.kubernetes.io/instance: "pve-csi"
 ```
 
-`.Release.Name` is the installation name, not a version. `quote` wraps it in quotes as a YAML string. With Argo CD, the Helm release name defaults to the Application name. The label groups resources belonging to that installation; this chart also uses it with a component label to select the Controller or Node Pods. Keep the installation name stable during upgrades. See [Helm built-in objects](https://helm.sh/docs/chart_template_guide/builtin_objects/) and [Argo CD Helm release names](https://argo-cd.readthedocs.io/en/stable/user-guide/helm/#helm-release-name).
+`.Release.Name` is the installation name passed to Helm, such as `pve-csi` in the install command above. `quote` wraps it in quotes as a YAML string. The label groups resources belonging to that installation; this chart also uses it with a component label to select the Controller or Node Pods. Keep the installation name stable during upgrades. See [Helm built-in objects](https://helm.sh/docs/chart_template_guide/builtin_objects/).
 
 ## Sidecar versions
 
@@ -152,7 +179,8 @@ Use explicit versions, check upstream release notes and compatibility requiremen
 ## Validate and maintain
 
 ```sh
-helm lint charts/pve-csi --strict --kube-version 1.34.0 -f charts/pve-csi/ci/values.yaml
+# Run the same offline lint/render and CronJob name checks as CI.
+bash .github/scripts/check-helm.sh
 # Render your settings locally without contacting the cluster.
 helm template pve-csi charts/pve-csi --namespace pve-csi --kube-version 1.34.0 -f my-values.yaml
 ```
@@ -163,4 +191,4 @@ For local rendering, set `--kube-version` to the target Kubernetes version; thes
 
 Install each `driverName` only once per cluster. Do not change the driver name or disk owner VMID while its PVs exist. StorageClass provisioning fields cannot be edited in place: create a differently named class when changing storage pools; existing PVs keep their settings. Multiple Controller replicas, custom kubelet paths, expansion, and snapshots are not supported.
 
-Before uninstalling, handle the consuming Pods and PVCs and confirm unmounting, detachment, and intended disk deletion have completed. Upgrades do not require deleting PVCs. Do not use Argo CD Force/Replace to recreate storage resources.
+Before uninstalling, handle the consuming Pods and PVCs and confirm unmounting, detachment, and intended disk deletion have completed. Upgrades do not require deleting PVCs.

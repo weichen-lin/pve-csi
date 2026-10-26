@@ -101,7 +101,7 @@ spec:
             - name: PVE_NODE
               value: {{ .Values.pve.node | quote }}
             - name: PVE_OWNER_VMID
-              value: {{ .Values.pve.ownerVMID | quote }}
+              value: {{ int64 .Values.pve.ownerVMID | toString | quote }}
             {{- if .Values.pve.caConfigMap }}
             - name: PVE_CA_FILE
               value: /etc/pve/ca.crt

@@ -257,19 +257,28 @@ func (g *AttachmentGateway) Attach(ctx context.Context, id domain.Identity, vm d
 	if err != nil {
 		return volume.AtStep("prepare_attachment", id.Reference(), err)
 	}
+	slot, err := freeSCSISlot(cfg)
+	if err != nil {
+		return err
+	}
+	// Foreign-owner volume: never rename or transfer ownership to the node VM.
+	form := url.Values{"digest": {cfg.Digest}, slot: {id.Reference() + ",serial=" + id.Serial() + ",backup=0"}}
+	return g.update(ctx, path, vm, form)
+}
+
+// freeSCSISlot is shared by actual attachment and the read-only preflight.
+func freeSCSISlot(cfg vmConfig) (string, error) {
 	if !strings.HasPrefix(cfg.SCSIHardware, "virtio-scsi") {
-		return volume.NewBackendError(volume.FailurePrecondition, "Kubernetes VM requires a VirtIO SCSI controller", nil)
+		return "", volume.NewBackendError(volume.FailurePrecondition, "Kubernetes VM requires a VirtIO SCSI controller", nil)
 	}
 	for i := 1; i <= 30; i++ {
 		slot := "scsi" + strconv.Itoa(i)
 		if _, used := cfg.Drives[slot]; used {
 			continue
 		}
-		// Foreign-owner volume: never rename or transfer ownership to the node VM.
-		form := url.Values{"digest": {cfg.Digest}, slot: {id.Reference() + ",serial=" + id.Serial() + ",backup=0"}}
-		return g.update(ctx, path, vm, form)
+		return slot, nil
 	}
-	return volume.NewBackendError(volume.FailurePrecondition, "VM has no free SCSI disk slot", nil)
+	return "", volume.NewBackendError(volume.FailurePrecondition, "VM has no free SCSI disk slot", nil)
 }
 
 func (g *AttachmentGateway) Detach(ctx context.Context, id domain.Identity, ref domain.DiskReference) error {

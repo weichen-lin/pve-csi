@@ -83,8 +83,32 @@
       },
       "if": {"properties": {"create": {"const": true}}},
       "then": {"properties": {"storage": {"minLength": 1}}}
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "vmids", "timeout", "ttlSecondsAfterFinished", "resources"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "vmids": {
+          "description": "PVE VMIDs of the Kubernetes node VMs to check.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 100, "maximum": 999999999}
+        },
+        "timeout": {"type": "string", "pattern": "^[1-9][0-9]*(s|m)$"},
+        "ttlSecondsAfterFinished": {"type": "integer", "minimum": 0},
+        "resources": {"type": "object"}
+      },
+      "if": {"properties": {"enabled": {"const": true}}},
+      "then": {"properties": {"vmids": {"minItems": 1}}}
     }
   },
+  "if": {
+    "required": ["check"],
+    "properties": {"check": {"required": ["enabled"], "properties": {"enabled": {"const": true}}}}
+  },
+  "then": {"properties": {"storageClass": {"properties": {"storage": {"minLength": 1}}}}},
   "definitions": {
     "resourceName": {
       "description": "Kubernetes resource name: 1-253 lowercase letters, digits, hyphens or dots; each dot-separated part must start and end with a letter or digit.",

@@ -9,6 +9,7 @@
 # Credentials and environment files must not enter Git from other locations.
 .env
 .env.*
+!/.env.example
 *.pem
 *.key
 *.p12

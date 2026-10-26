@@ -62,6 +62,8 @@ Controller 啟動時就會檢查這個權限與 `/vms` 的 `VM.Audit` 傳播權�
 
 ## 設定完成後確認
 
+可在本機執行 [`pve-csi check`](CHECK.md)，使用 CSI Token 一次檢查權限、儲存池與指定 Kubernetes VM 的準備狀態；全程只讀取，不會建立或接拔磁碟。
+
 用 CSI 的 Token 查 `/access/permissions?path=/vms/100` 與 `/vms/101`，兩者都應包含 `VM.Audit`、`VM.Config.Disk`。
 另外查 `/access/permissions?path=/nodes/pve`，應包含 `Sys.Audit`。
 權限查詢中值 `0`／`1` 表示是否向下傳播，不是「拒絕／允許」；權限名稱有出現才代表具備該權限。
