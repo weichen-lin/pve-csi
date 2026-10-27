@@ -206,13 +206,14 @@ func TestCheckServiceRejectsInvalidInputsBeforeObservations(t *testing.T) {
 			t.Fatalf("invalid options reached observations: error=%v calls=%v", err, gateway.calls)
 		}
 	}
-	service, gateway, options := checkServiceFixture(t)
-	if _, err := service.Check(nil, options); err == nil || len(gateway.calls) != 0 {
-		t.Fatal("nil context must be rejected before observations")
-	}
+	_, _, options := checkServiceFixture(t)
 	var uninitialized *CheckService
 	if _, err := uninitialized.Check(context.Background(), options); err == nil {
 		t.Fatal("nil service must be rejected")
+	}
+	uninitialized = &CheckService{}
+	if _, err := uninitialized.Check(context.Background(), options); err == nil {
+		t.Fatal("service without a gateway must be rejected")
 	}
 }
 

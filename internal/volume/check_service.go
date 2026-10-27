@@ -22,13 +22,14 @@ func NewCheckService(gateway CheckGateway) (*CheckService, error) {
 }
 
 // Check reports operational failures as rows. Errors indicate invalid input or
-// service state. Callers should provide a deadline bounding the whole check.
+// service state. Callers must pass a non-nil context and should provide a deadline
+// bounding the whole check.
 func (s *CheckService) Check(ctx context.Context, options CheckOptions) (CheckReport, error) {
 	if err := options.Validate(); err != nil {
 		return nil, err
 	}
-	if ctx == nil || s == nil || s.gateway == nil {
-		return nil, errors.New("check requires a context and initialized service")
+	if s == nil || s.gateway == nil {
+		return nil, errors.New("check requires an initialized service")
 	}
 	gateway := s.gateway
 	run := checkRun{ctx: ctx}

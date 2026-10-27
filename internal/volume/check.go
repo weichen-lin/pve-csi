@@ -38,10 +38,10 @@ func (o CheckOptions) Validate() error {
 			return errors.New("each Kubernetes VMID must be an integer from 100 to 999999999")
 		}
 		if id == o.OwnerVMID {
-			return errors.New("Kubernetes VMIDs must differ from the reserved owner VMID")
+			return errors.New("selected Kubernetes VMIDs must differ from the reserved owner VMID")
 		}
 		if seen[id] {
-			return errors.New("Kubernetes VMIDs must be unique")
+			return errors.New("selected Kubernetes VMIDs must be unique")
 		}
 		seen[id] = true
 	}
