@@ -7,8 +7,7 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 )
 
-// CheckOptions describes existing resources, never resources to create.
-// Explicit VMIDs prevent a filtered or empty inventory from passing the check.
+// CheckOptions requires explicit VMIDs so filtered inventories cannot pass silently.
 type CheckOptions struct {
 	Node      string
 	Storage   string
@@ -60,8 +59,7 @@ const (
 	CheckConnectionTarget CheckTargetKind = "connection"
 )
 
-// CheckTarget identifies an application resource, not an API URL or ACL path.
-// The process boundary decides how to display it.
+// CheckTarget identifies a resource without encoding its display path.
 type CheckTarget struct {
 	Kind    CheckTargetKind
 	Node    string
@@ -76,8 +74,7 @@ const (
 	CheckSkip = "SKIP"
 )
 
-// CheckResult contains only authored, credential-free diagnostics. A passing
-// observation does not reserve a resource or authorize a later write.
+// CheckResult contains authored diagnostics, not authorization for later writes.
 type CheckResult struct {
 	Name   string
 	Target CheckTarget
@@ -101,8 +98,7 @@ func (report CheckReport) Successful() bool {
 	return passed
 }
 
-// CheckVM is a validated inventory entry. Templates remain visible for
-// membership checks but are not eligible Kubernetes node identities.
+// CheckVM includes templates for inventory checks, but excludes them as node identities.
 type CheckVM struct {
 	VMID     int
 	Template bool
@@ -110,14 +106,12 @@ type CheckVM struct {
 
 type CheckPoolObservation struct {
 	Pool              domain.Pool
-	Detail            string // Adapter-authored description, displayed only after domain checks pass.
-	UnsupportedDetail string // Adapter-specific format requirements if the domain rejects SupportsVolumes.
+	Detail            string // Displayed after domain checks pass.
+	UnsupportedDetail string // Format requirements when SupportsVolumes is false.
 }
 
-// CheckGateway is the diagnostic use case's read-only port. Permission checks
-// only observe capability; implementations must never create, delete, attach
-// or otherwise mutate resources. Details and failure hints are authored by
-// the adapter, never copied from untrusted response bodies or credentials.
+// CheckGateway permits read-only observations. Adapters must return authored
+// diagnostics, never response bodies or credentials.
 type CheckGateway interface {
 	TaskAccess(context.Context, string) (string, error)
 	InventoryAccess(context.Context) (string, error)
@@ -138,9 +132,8 @@ type CheckGateway interface {
 	AttachmentReadiness(context.Context, domain.VirtualMachine) (string, error)
 }
 
-// CheckFailure classifies a failed observation without exposing transport
-// types to the application. Terminal means further observations cannot be
-// trusted/useful in this run (for example authentication or connection loss).
+// CheckFailure marks an observation failure. Terminal failures stop the check
+// because further observations would be unreliable, such as after connection loss.
 type CheckFailure struct {
 	hint     string
 	terminal bool

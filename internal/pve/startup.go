@@ -9,9 +9,8 @@ import (
 	"pve-csi.local/csi-plugin/internal/volume"
 )
 
-// CheckAccess verifies PVE access and node existence before CSI is served.
-// Pool and target-VM write permissions depend on later CSI requests. Do not
-// demand permissions on unrelated pools/VMs or cache this as authorization.
+// CheckAccess validates node visibility and inventory/task read permissions.
+// Write permissions are checked for each CSI operation.
 func (c *Client) CheckAccess(ctx context.Context, node string) error {
 	if !domain.ValidNodeName(node) {
 		return domain.ErrInvalidInventory
@@ -26,8 +25,7 @@ func (c *Client) CheckAccess(ctx context.Context, node string) error {
 	if err := inventory.checkInventoryAccess(ctx); err != nil {
 		return err
 	}
-	// Permission paths can exist independently of the node. Verify the actual
-	// configured node responds, using the Sys.Audit grant checked above.
+	// ACL paths may exist without a node; verify the node itself responds.
 	var state struct {
 		Uptime *int64 `json:"uptime"`
 	}

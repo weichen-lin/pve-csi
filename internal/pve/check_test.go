@@ -70,8 +70,6 @@ func newCheckTestService(t *testing.T, client *Client) *volume.CheckService {
 	return service
 }
 
-// Test-only display keeps existing HTTP regressions readable while the report
-// itself contains application targets rather than transport-specific paths.
 func checkTestTarget(target volume.CheckTarget) string {
 	switch target.Kind {
 	case volume.CheckNodeTarget:
@@ -378,8 +376,7 @@ func TestCheckMissingNodeSkipsNodeScopedRequests(t *testing.T) {
 			if node == "pve" {
 				f.nodes = []map[string]string{}
 			}
-			// ACL paths may exist independently of the node. The wrong-node
-			// detail API models PVE's ordinary exception -> HTTP 500 behavior.
+			// PVE may return HTTP 500 for a missing node even when its ACL path exists.
 			f.permissions["/nodes/"+node] = map[string]int{"Sys.Audit": 0}
 			f.override = func(w http.ResponseWriter, r *http.Request) bool {
 				if strings.HasPrefix(r.URL.Path, "/api2/json/nodes/"+node+"/") {

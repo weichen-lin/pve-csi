@@ -27,8 +27,6 @@ const (
 	ReferenceUnused
 )
 
-// DiskReference records a backend observation, including references that cannot
-// be detached through the normal live-volume lifecycle.
 type DiskReference struct {
 	Source ReferenceSource
 	Slot   string
@@ -44,8 +42,7 @@ const (
 	SourceContainer
 )
 
-// ReferenceSource identifies a guest referencing a disk. NodeID is optional:
-// a container or template still blocks deletion without any guest UUID.
+// ReferenceSource may omit NodeID; templates and containers still block deletion.
 type ReferenceSource struct {
 	Kind   SourceKind
 	Node   string
@@ -57,8 +54,7 @@ func (vm VirtualMachine) ReferenceSource() ReferenceSource {
 	return ReferenceSource{Kind: SourceVM, Node: vm.Node, VMID: vm.VMID, NodeID: vm.ID}
 }
 
-// VirtualMachine refuses to turn a container/template or unidentified source
-// into an attachment target, even if it happens to carry a matching UUID.
+// VirtualMachine rejects containers and templates even if their UUID matches.
 func (source ReferenceSource) VirtualMachine() (VirtualMachine, error) {
 	vm := VirtualMachine{Node: source.Node, VMID: source.VMID, ID: source.NodeID}
 	if source.Kind != SourceVM || vm.Validate() != nil {
@@ -70,8 +66,7 @@ func (source ReferenceSource) VirtualMachine() (VirtualMachine, error) {
 // References is one complete observation, never a partial scan.
 type References []DiskReference
 
-// DetachableVM validates one reference and returns its VM without requiring a
-// collection lookup. PVE-specific slot checks remain in the adapter.
+// DetachableVM rejects non-live references and mismatched disk identities.
 func (ref DiskReference) DetachableVM(id Identity) (VirtualMachine, error) {
 	if err := id.Validate(); err != nil {
 		return VirtualMachine{}, err
@@ -83,7 +78,6 @@ func (ref DiskReference) DetachableVM(id Identity) (VirtualMachine, error) {
 	return vm, nil
 }
 
-// CheckAttachmentTarget validates the target before querying disk references.
 func (id Identity) CheckAttachmentTarget(vm VirtualMachine) error {
 	if err := id.Validate(); err != nil {
 		return err

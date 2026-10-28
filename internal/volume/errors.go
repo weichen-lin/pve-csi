@@ -25,11 +25,10 @@ const (
 	FailurePrecondition
 )
 
-// BackendError carries immutable classification and an adapter-authored safe
-// hint across the port. HTTP facts and cancellation remain available via Unwrap.
+// BackendError carries an adapter-authored hint and classification.
+// Unwrap preserves the underlying cause.
 type BackendError struct {
-	kind FailureKind
-	// Hint is authored by the adapter, never copied from an HTTP response or token.
+	kind  FailureKind
 	hint  string
 	cause error
 }
@@ -56,8 +55,7 @@ func rejectedWrite(err error) bool {
 func (e *BackendError) Error() string { return "volume backend operation failed" }
 func (e *BackendError) Unwrap() error { return e.cause }
 
-// StepError identifies the failed operation. Target contains only validated
-// resource identifiers; underlying backend messages are not sent to CSI clients.
+// StepError adds an operation name and validated resource ID to a backend error.
 type StepError struct {
 	step   string
 	target string

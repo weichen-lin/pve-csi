@@ -9,8 +9,7 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 )
 
-// Commit the effect independently of the response/read-back. Restarting Service
-// preserves this backend, just as restarting the controller preserves PVE state.
+// Backend effects survive service restarts even when the response is lost.
 type lostReplyStorage struct {
 	*storageStub
 	failReadback  bool

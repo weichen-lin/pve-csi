@@ -9,13 +9,12 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 )
 
-// Absent identity is a non-candidate during discovery, not an unreadable VM.
+// A missing UUID excludes a VM from discovery without invalidating the inventory.
 var errMissingVMUUID = errors.New("PVE VM has no SMBIOS UUID")
 
 var driveSlot = regexp.MustCompile(`^(scsi|sata|virtio|ide|unused|mp)[0-9]+$|^(rootfs|efidisk0|tpmstate0)$`)
 
-// vmConfig translates PVE's dynamic drive keys at the adapter boundary.
-// Missing optional settings use PVE defaults; malformed settings never do.
+// vmConfig accepts PVE defaults for missing settings, but rejects malformed values.
 type vmConfig struct {
 	Digest, SMBIOS, Lock, Hotplug, SCSIHardware string
 	Template                                    int

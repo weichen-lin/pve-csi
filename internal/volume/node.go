@@ -6,16 +6,13 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 )
 
-// NodeInventory returns observed non-template VMs after read-access checks.
-// Query failures must return an error, never a usable partial result.
-// The operator must grant unfiltered inventory access; the API cannot prove
-// that no completely hidden VM exists.
+// NodeInventory requires unfiltered read access and returns no partial results.
+// The API cannot detect completely hidden VMs.
 type NodeInventory interface {
 	VirtualMachines(context.Context, string) ([]domain.VirtualMachine, error)
 }
 
-// resolveNode always observes current VM identities; it never caches a match.
-// Publish validates and parses the raw UUID before any backend reads.
+// resolveNode rereads VM identities to detect replacements and UUID collisions.
 func (s *Service) resolveNode(ctx context.Context, id domain.NodeID) (domain.VirtualMachine, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.VirtualMachine{}, AtStep("resolve_node", s.scope.Node, err)

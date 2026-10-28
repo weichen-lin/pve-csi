@@ -7,9 +7,8 @@ import (
 	"pve-csi.local/csi-plugin/internal/volume"
 )
 
-// CheckStartup makes missing tools and mount privileges startup failures,
-// before a request can format a disk. Only an unpublished clone is inspected;
-// no disk, existing mount, or Pod target is modified.
+// CheckStartup probes tools and mount privileges with an unpublished clone.
+// It leaves existing mounts and disks untouched.
 func (g *MountGateway) CheckStartup(ctx context.Context) error {
 	return g.checkStartup(ctx, exec.LookPath)
 }

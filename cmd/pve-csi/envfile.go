@@ -11,10 +11,8 @@ import (
 
 const maxCheckEnvFileBytes = 1 << 20
 
-// loadCheckEnvFile reads the optional .env in the current directory into a
-// private lookup; it never mutates the process environment or evaluates shell
-// syntax. Nonempty process values win.
-// Duplicate file assignments use the last value, including an empty value.
+// loadCheckEnvFile overlays nonempty process values on the last .env assignments.
+// It neither mutates the process environment nor evaluates shell syntax.
 func loadCheckEnvFile(getenv func(string) string) (func(string) string, error) {
 	file, err := os.Open(".env")
 	if err != nil {
@@ -86,9 +84,8 @@ func validCheckEnvKey(key string) bool {
 	return true
 }
 
-// A quoted value must occupy the whole value, apart from an optional trailing
-// whitespace-separated comment. In double quotes, escaped quotes and backslashes
-// are unescaped; all other backslashes and every dollar sign/backtick stay literal.
+// Quoted values allow only a whitespace-separated trailing comment.
+// Only escaped quotes and backslashes are unescaped inside double quotes.
 func parseCheckEnvValue(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {

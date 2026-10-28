@@ -61,13 +61,11 @@ func (g *StorageGateway) checkReadAccess(ctx context.Context, placement domain.P
 	if err != nil {
 		return volume.AtStep("check_storage_permissions", path, mapError(err))
 	}
-	// First check access to the pool's status and content endpoints.
 	canReadPool := permissions.Audit || permissions.AllocateSpace
 	if !canReadPool {
 		return volume.AtStep("check_storage_permissions", path, missingPrivilege(path, "Datastore.Audit"))
 	}
-	// Allocate permits seeing every disk. Otherwise visibility requires BOTH
-	// storage Audit and VM.Config.Disk on the reserved owner.
+	// Full visibility requires Allocate, or Audit plus VM.Config.Disk on the owner.
 	if permissions.Allocate {
 		return nil
 	}

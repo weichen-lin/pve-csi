@@ -8,7 +8,6 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 )
 
-// Records effects at the application port; no HTTP or PVE permissions here.
 type storageStub struct {
 	pool                                                     domain.Pool
 	allocation                                               *domain.Allocation

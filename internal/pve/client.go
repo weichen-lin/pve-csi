@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// Config contains connection settings only, never a queried VM or allocation owner.
 type Config struct {
 	Endpoint    string
 	TokenID     string

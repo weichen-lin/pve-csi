@@ -18,8 +18,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-// SocketPath deliberately supports local Unix sockets only. The CSI endpoint
-// has no network authentication and must not be exposed as a TCP service.
+// SocketPath accepts only Unix sockets because CSI has no network authentication.
 func SocketPath(endpoint string) (string, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Scheme != "unix" || u.Host != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" ||
@@ -114,8 +113,6 @@ func removeStaleSocket(path string) error {
 	return os.Remove(path)
 }
 
-// Register accepts already composed services. It neither opens a listener nor
-// initializes PVE connections.
 func Register(server *grpc.Server, controller *Controller, version string) {
 	csi.RegisterIdentityServer(server, newIdentity(controller.cfg.DriverName, version,
 		csi.PluginCapability_Service_CONTROLLER_SERVICE,
@@ -153,8 +150,6 @@ func (s *Identity) GetPluginCapabilities(context.Context, *csi.GetPluginCapabili
 }
 
 func (s *Identity) Probe(context.Context, *csi.ProbeRequest) (*csi.ProbeResponse, error) {
-	// Production registration follows configuration and adapter startup checks.
-	// This reports initialization
-	// only: it does not claim PVE connectivity or provisioner readiness.
+	// Readiness reports initialization, not backend connectivity.
 	return &csi.ProbeResponse{Ready: wrapperspb.Bool(true)}, nil
 }

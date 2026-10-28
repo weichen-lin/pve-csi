@@ -42,8 +42,6 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	return cfg, nil
 }
 
-// Read-only checks share controller connection/scope configuration without a
-// CSI driver name or a running CSI service.
 func loadPVEConfig(getenv func(string) string) (Config, error) {
 	connection, err := (pve.Config{
 		Endpoint: getenv("PVE_ENDPOINT"), TokenID: getenv("PVE_TOKEN_ID"),

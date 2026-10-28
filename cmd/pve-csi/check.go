@@ -92,8 +92,7 @@ Exit status: 0 when required checks pass; 1 on failure. Warnings describe untest
 	}
 	client, err := pve.NewCheckClient(cfg.Connection, insecure)
 	if err != nil {
-		// Normalize already validated configuration. Remaining client creation
-		// errors concern the local CA; never echo arbitrary file contents/paths.
+		// Only CA errors remain after validation; keep file paths and contents private.
 		return errors.New("cannot initialize PVE TLS trust; check that PVE_CA_FILE is readable and contains PEM CA certificates")
 	}
 	defer client.Close()
@@ -109,8 +108,6 @@ Exit status: 0 when required checks pass; 1 on failure. Warnings describe untest
 	defer cancel()
 	results, err := service.Check(checkCtx, options)
 	if err != nil {
-		// Backend validation has already succeeded. Do not expose raw transport
-		// errors if a future backend change returns one here.
 		return errors.New("PVE check could not complete")
 	}
 	if insecure {
@@ -147,7 +144,7 @@ func printCheckResults(out io.Writer, results volume.CheckReport) error {
 	return nil
 }
 
-// PVE ACL-style target labels are presentation, not application API paths.
+// Target paths are display labels, not backend API routes.
 func formatCheckTarget(target volume.CheckTarget) (string, error) {
 	switch target.Kind {
 	case volume.CheckNodeTarget:

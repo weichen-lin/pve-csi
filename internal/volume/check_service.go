@@ -8,8 +8,7 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 )
 
-// CheckService owns the read-only deployment check and its prerequisite policy.
-// Successful observations do not reserve resources or authorize later writes.
+// CheckService runs read-only checks in prerequisite order.
 type CheckService struct {
 	gateway CheckGateway
 }
@@ -21,9 +20,8 @@ func NewCheckService(gateway CheckGateway) (*CheckService, error) {
 	return &CheckService{gateway: gateway}, nil
 }
 
-// Check reports operational failures as rows. Errors indicate invalid input or
-// service state. Callers must pass a non-nil context and should provide a deadline
-// bounding the whole check.
+// Check reports operational failures as rows and invalid inputs as errors.
+// Callers should set a deadline for the entire check.
 func (s *CheckService) Check(ctx context.Context, options CheckOptions) (CheckReport, error) {
 	if err := options.Validate(); err != nil {
 		return nil, err

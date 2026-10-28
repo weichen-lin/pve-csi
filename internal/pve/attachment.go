@@ -105,9 +105,7 @@ func (g *AttachmentGateway) References(ctx context.Context, id domain.Identity) 
 	return result, nil
 }
 
-// guestReferences completes one guest observation before it can be merged.
-// A failed read returns no partial references, and pending changes affect only
-// this guest's slots.
+// guestReferences returns a complete per-guest observation or an error.
 func (g *AttachmentGateway) guestReferences(ctx context.Context, id domain.Identity, kind string, vmid int) (domain.References, error) {
 	if err := g.client.checkVMReadAccess(ctx, vmid); err != nil {
 		return nil, err
@@ -266,7 +264,6 @@ func (g *AttachmentGateway) Attach(ctx context.Context, id domain.Identity, vm d
 	return g.update(ctx, path, vm, form)
 }
 
-// freeSCSISlot is shared by actual attachment and the read-only preflight.
 func freeSCSISlot(cfg vmConfig) (string, error) {
 	if !strings.HasPrefix(cfg.SCSIHardware, "virtio-scsi") {
 		return "", volume.NewBackendError(volume.FailurePrecondition, "Kubernetes VM requires a VirtIO SCSI controller", nil)

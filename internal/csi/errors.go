@@ -151,8 +151,7 @@ func stepStatus(err error, code codes.Code, message string) error {
 	return &operationStatus{status: status.New(code, message), step: stepName}
 }
 
-// The protocol translation is also the safe diagnostic boundary. Original
-// backend errors are deliberately absent; only authored client-safe text remains.
+// Expose only authored CSI diagnostics; backend errors stay internal.
 type operationStatus struct {
 	status *status.Status
 	step   string

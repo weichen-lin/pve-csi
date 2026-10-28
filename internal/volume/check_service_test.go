@@ -13,8 +13,6 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 )
 
-// This port has no write operations or transport. Calls describe observations
-// so tests can assert what was skipped, even when a report has useful failures.
 type checkGatewayStub struct {
 	calls       []string
 	failures    map[string]error

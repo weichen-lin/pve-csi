@@ -10,8 +10,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// CheckHealth probes the serving CSI socket, not PVE connectivity. The caller
-// must bound the request; a backend outage must not cause a restart storm.
+// CheckHealth probes CSI readiness, not PVE connectivity, to avoid restart storms.
+// Callers must set a deadline.
 func CheckHealth(ctx context.Context, endpoint string) error {
 	if _, err := SocketPath(endpoint); err != nil {
 		return err

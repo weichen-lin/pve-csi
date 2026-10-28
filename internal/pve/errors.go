@@ -13,8 +13,7 @@ import (
 	"pve-csi.local/csi-plugin/internal/volume"
 )
 
-// HTTPError preserves status classification without retaining a server body
-// or credentials.
+// HTTPError retains status without response bodies or credentials.
 type HTTPError struct {
 	Method     string
 	Path       string
@@ -27,8 +26,7 @@ func (e *HTTPError) Error() string {
 
 var ErrStorageNotFound = errors.New("PVE storage not found")
 
-// decodeAPIError translates recognized PVE errors while preserving HTTP facts.
-// Unrecognized or unreadable bodies remain HTTP errors; response text is never retained.
+// decodeAPIError maps recognized PVE failures without retaining response text.
 func decodeAPIError(httpErr *HTTPError, response io.Reader) error {
 	if httpErr.StatusCode != http.StatusBadRequest {
 		return httpErr

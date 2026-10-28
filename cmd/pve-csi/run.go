@@ -142,8 +142,7 @@ func serveController(ctx context.Context, out io.Writer, endpoint string, cfg Co
 	return csidriver.Serve(ctx, endpoint, server, out)
 }
 
-// Process-boundary text uses only authored hints, never a transport error or
-// response body. Request-time errors keep their normal CSI classification.
+// Startup errors expose only authored hints, never transport errors or response bodies.
 func startupFailure(err error) error {
 	detail := "startup check failed"
 	var backend *volume.BackendError

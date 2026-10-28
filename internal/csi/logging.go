@@ -13,8 +13,8 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 )
 
-// Log only allowlisted identifiers and our own error translations. Never dump
-// protobuf requests, responses, metadata, raw backend errors or credentials.
+// Log only allowlisted identifiers and authored errors.
+// Requests, responses, metadata and backend errors may contain credentials.
 func RequestLogger(logger *slog.Logger) grpc.UnaryServerInterceptor {
 	var sequence atomic.Uint64
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {

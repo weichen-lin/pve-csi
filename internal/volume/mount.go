@@ -23,8 +23,7 @@ type MountGateway interface {
 	Unstage(context.Context, domain.Identity, string) error
 }
 
-// NodeService serializes local mount operations. Durable state is the actual
-// filesystem identity and kernel mount table, not a process-local success flag.
+// NodeService serializes mounts using filesystem identity and kernel mount state.
 type NodeService struct {
 	gateway MountGateway
 	node    string

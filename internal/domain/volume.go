@@ -7,10 +7,8 @@ import (
 	"unicode/utf8"
 )
 
-// Request is a command payload, not a confirmed Volume. Validate it before IO.
-// OwnerVMID is allocation ownership, not an attachment target.
-// The operator must reserve it and keep it stable across retries: PVE uses the
-// owner for permissions and VM disk cleanup.
+// Request holds unconfirmed allocation parameters.
+// OwnerVMID must remain reserved: PVE uses it for permissions and disk cleanup.
 type Request struct {
 	name               string
 	Node               string
@@ -20,8 +18,7 @@ type Request struct {
 	CapacityLimitBytes int64
 }
 
-// NewRequest accepts the original name, never a pre-hashed backend name.
-// Identity derivation belongs here so all callers use the same retry key.
+// NewRequest derives retry identity from the original, unhashed name.
 func NewRequest(name string, placement Placement, owner int, capacity, limit int64) (Request, error) {
 	r := Request{name: name, Node: placement.Node, Storage: placement.Storage, OwnerVMID: owner, CapacityBytes: capacity, CapacityLimitBytes: limit}
 	if err := r.Validate(); err != nil {
@@ -35,8 +32,7 @@ type Placement struct {
 	Storage string
 }
 
-// Allocation is a backend observation. Confirm or Restore validates it before
-// constructing a Volume.
+// Allocation must pass Confirm or Restore before becoming a Volume.
 type Allocation struct {
 	Reference     string
 	Placement     Placement
@@ -44,8 +40,7 @@ type Allocation struct {
 	CapacityBytes int64
 }
 
-// Volume is an immutable confirmed allocation. It represents observed backend
-// state, not a local database record or an atomic remote transaction.
+// Volume is an immutable, validated observation of a backend allocation.
 type Volume struct {
 	id         string
 	allocation Allocation

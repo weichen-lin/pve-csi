@@ -6,9 +6,8 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 )
 
-// StorageGateway is the application's port to storage. InspectPool verifies
-// read access; observations never authorize writes. The application decides
-// when allocation/deletion checks are required, including idempotent retries.
+// StorageGateway separates read observations from write authorization.
+// The service checks write permissions on every operation, including retries.
 type StorageGateway interface {
 	InspectPool(context.Context, domain.Placement, int) (domain.Pool, error)
 	LookupVolume(context.Context, domain.Identity) (domain.Allocation, bool, error)

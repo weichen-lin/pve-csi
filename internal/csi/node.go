@@ -26,7 +26,6 @@ func (cfg NodeConfig) Validate() error {
 	return nil
 }
 
-// Node serves guest identity and delegates mount operations to the application.
 type Node struct {
 	csi.UnimplementedNodeServer
 	cfg     NodeConfig

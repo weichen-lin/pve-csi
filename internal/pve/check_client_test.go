@@ -40,8 +40,7 @@ func TestNewCheckClientInsecureIsExplicitAndIsolated(t *testing.T) {
 			t.Fatal("constructor changed the caller's configuration")
 		}
 	}
-	// Creating an insecure diagnostic client must not weaken subsequent secure
-	// diagnostic clients or the normal controller client factory.
+	// An insecure check must not affect later clients.
 	cfg.CAFile = ""
 	for _, factory := range []struct {
 		name string
@@ -64,7 +63,6 @@ func TestNewCheckClientInsecureIsExplicitAndIsolated(t *testing.T) {
 			}
 		})
 	}
-	// Without the explicit override, CA configuration is still read normally.
 	cfg.CAFile = filepath.Join(t.TempDir(), "missing-ca.pem")
 	if client, err := NewCheckClient(cfg, false); err == nil || client != nil {
 		t.Fatal("secure check ignored a missing CA file")

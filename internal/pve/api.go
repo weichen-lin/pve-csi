@@ -99,8 +99,7 @@ type taskStatus struct {
 	ExitStatus string `json:"exitstatus"`
 }
 
-// waitTask observes only the task returned for the expected operation/target.
-// Callers set their deadline and translate exit status into operation-specific errors.
+// waitTask accepts only task IDs matching the expected operation and target.
 func (c *Client) waitTask(ctx context.Context, node, upid, kind, id string) (string, error) {
 	parts := strings.Split(upid, ":")
 	if len(parts) != 9 || parts[0] != "UPID" || parts[1] != node ||
@@ -206,8 +205,7 @@ func (c *Client) OwnerUnused(ctx context.Context, owner int) (bool, error) {
 	return true, nil
 }
 
-// StoragePermissions describes the authenticated token's effective privileges,
-// including the restrictions imposed by its backing user and privilege separation.
+// StoragePermissions returns effective privileges after user/token restrictions.
 type StoragePermissions struct {
 	Audit         bool
 	AllocateSpace bool

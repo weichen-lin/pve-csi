@@ -7,10 +7,8 @@ import (
 	"pve-csi.local/csi-plugin/internal/domain"
 )
 
-// CheckFailureDetail is the single source of diagnostic wording for shared
-// application failures. Adapters may reuse it when normalizing observations.
-// An empty result means the error is unknown; callers must use an authored
-// fallback, never err.Error(). Backend-specific hints remain adapter-owned.
+// CheckFailureDetail returns safe text for shared failures, or an empty string.
+// Unknown errors need an authored fallback; never use err.Error().
 func CheckFailureDetail(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "check canceled"

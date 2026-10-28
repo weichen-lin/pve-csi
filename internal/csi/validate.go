@@ -23,8 +23,7 @@ func (c *Controller) ValidateVolumeCapabilities(ctx context.Context, req *csi.Va
 		return nil, csiReadError(err)
 	}
 	if len(req.Secrets) != 0 || len(req.VolumeContext) != 0 {
-		// CreateVolume emits no volume_context, and authentication is configured
-		// on the driver. Do not silently confirm caller-supplied context/secrets.
+		// Driver-level auth and empty volume_context exclude caller-supplied values.
 		return nil, status.Error(codes.InvalidArgument, "per-request secrets and nonempty volume context are not supported")
 	}
 	for _, capability := range req.VolumeCapabilities {
@@ -40,8 +39,7 @@ func (c *Controller) ValidateVolumeCapabilities(ctx context.Context, req *csi.Va
 	unsupported := func() (*csi.ValidateVolumeCapabilitiesResponse, error) {
 		return &csi.ValidateVolumeCapabilitiesResponse{Message: "requested capabilities or parameters are not supported"}, nil
 	}
-	// Existence is checked before returning an unsupported capability. Never
-	// echo unknown protobuf fields as if this version had validated them.
+	// Verify existence even for unsupported capabilities; do not echo unknown fields.
 	if len(req.MutableParameters) != 0 || len(req.ProtoReflect().GetUnknown()) != 0 {
 		return unsupported()
 	}

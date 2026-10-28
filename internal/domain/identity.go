@@ -108,9 +108,8 @@ func (id Identity) Validate() error {
 	return nil
 }
 
-// Restore validates a read-only observation without inventing a creation
-// request. Capacity may be larger than a whole-GiB allocation request, as in
-// Confirm's existing capacity-range contract. Format checks belong to adapters.
+// Restore validates an existing allocation without a provisioning request.
+// Observed capacity need not be a whole number of GiB.
 func Restore(id Identity, observed Allocation) (Volume, error) {
 	if err := id.Validate(); err != nil {
 		return Volume{}, err

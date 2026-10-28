@@ -2,8 +2,7 @@ package domain
 
 import "errors"
 
-// Pool is an observation, not a reservation. SupportsVolumes is supplied by
-// the adapter according to the volume format that adapter can allocate.
+// Pool describes current capacity and adapter-supported volume formats.
 type Pool struct {
 	Enabled         bool
 	Active          bool

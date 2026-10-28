@@ -1,5 +1,4 @@
-// Package linux implements the guest OS boundary. No PVE credentials or API
-// operations belong here. Commands are executed directly, never through a shell.
+// Package linux implements guest device and mount operations.
 package linux
 
 import (
@@ -23,8 +22,6 @@ import (
 	"pve-csi.local/csi-plugin/internal/volume"
 )
 
-// hostOperations keeps OS effects replaceable without moving Linux details into
-// the application port. Production state remains the kernel, never local flags.
 type hostOperations struct {
 	run         func(context.Context, string, ...string) ([]byte, error)
 	device      func(context.Context, domain.Identity) (device, error)
@@ -341,7 +338,6 @@ func (g *MountGateway) Stage(ctx context.Context, id domain.Identity, path strin
 		return volume.ErrUnsafeMount
 	}
 	if !formatted {
-		// blkid reports no known signature; verify wipefs also sees no signature.
 		out, err := g.run(ctx, "wipefs", "--no-act", "--json", "--output", "TYPE", "--", "/dev/"+d.Name)
 		if err != nil {
 			return err

@@ -77,15 +77,13 @@ func (s *Service) EnsureVolume(ctx context.Context, req domain.Request) (domain.
 	if unexpectedID {
 		postErr = errors.New("storage allocation returned an unexpected volume ID")
 	}
-	// Always read back after the one allocation attempt, using the caller's
-	// context. Never retry the write, rename or delete an uncertain result here.
+	// Read back after one write attempt; never retry or delete an uncertain result.
 	actual, found, lookupErr := s.observe(ctx, req)
 	if lookupErr == nil && found && !unexpectedID {
 		return actual, nil
 	}
 	if lookupErr == nil && !found {
-		// Authentication/authorization/route rejection is a definite failure,
-		// unlike a lost connection or 5xx after the server accepted the write.
+		// Explicit rejection proves failure; a lost response does not.
 		if rejectedWrite(postErr) {
 			return domain.Volume{}, AtStep("allocate_volume", target, postErr)
 		}
@@ -110,8 +108,7 @@ func (s *Service) release(id string) {
 	delete(s.inFlight, id)
 }
 
-// CheckReservedOwner is shared by startup and write workflows. Always observe
-// current ownership: successful startup never authorizes a later operation.
+// CheckReservedOwner rechecks ownership on every operation, including after startup.
 func (s *Service) CheckReservedOwner(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -163,8 +160,7 @@ func (s *Service) GetVolume(ctx context.Context, id domain.Identity) (domain.Vol
 		return domain.Volume{}, AtStep("lookup_volume", target, err)
 	}
 	if !found {
-		// Permission filtering can also hide volumes. This is not evidence
-		// that deletion occurred or permission to allocate another volume.
+		// Permission filtering can hide a volume without proving deletion.
 		return domain.Volume{}, AtStep("lookup_volume", target, ErrNotFound)
 	}
 	result, err := domain.Restore(id, observed)

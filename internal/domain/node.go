@@ -27,7 +27,6 @@ func ParseNodeID(raw string) (NodeID, error) {
 func (id NodeID) String() string { return id.uuid }
 
 // VirtualMachine is a non-template VM candidate with a guest UUID.
-// References from containers/templates are represented by ReferenceSource.
 type VirtualMachine struct {
 	Node string
 	VMID int
@@ -41,8 +40,7 @@ func (vm VirtualMachine) Validate() error {
 	return nil
 }
 
-// MatchNode requires a complete observation. A first match alone is not proof
-// of uniqueness; clones can retain the original guest's UUID.
+// MatchNode scans all candidates because clones can share a guest UUID.
 func MatchNode(node string, id NodeID, machines []VirtualMachine) (VirtualMachine, error) {
 	if id.uuid == "" {
 		return VirtualMachine{}, ErrInvalidNodeID

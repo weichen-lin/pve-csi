@@ -13,8 +13,7 @@ import (
 	"pve-csi.local/csi-plugin/internal/volume"
 )
 
-// CheckGateway adapts individual read-only PVE observations to the application
-// check port. Ordering, prerequisites and report policy belong to CheckService.
+// CheckGateway maps read-only PVE observations to deployment checks.
 type CheckGateway struct {
 	client      *Client
 	storage     *StorageGateway
@@ -130,9 +129,8 @@ func (g *CheckGateway) ListVMs(ctx context.Context, node string) ([]volume.Check
 	return vms, nil
 }
 
-// VMIdentities reuses the validated per-node list without querying it again.
-// Global read access is checked before and after the configuration reads so a
-// revoked grant cannot turn a filtered observation into a successful result.
+// VMIdentities reuses the supplied inventory and rechecks access around config reads.
+// Revoked grants must not turn filtered results into successful observations.
 func (g *CheckGateway) VMIdentities(ctx context.Context, node string, entries []volume.CheckVM) ([]domain.VirtualMachine, error) {
 	if err := g.attachments.checkInventoryAccess(ctx); err != nil {
 		return nil, normalizeCheckError(err)
@@ -213,8 +211,7 @@ func checkFatal(err error) bool {
 	return errors.As(err, &response) && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500)
 }
 
-// Shared application errors are handled before this backend-only mapping.
-// Underlying response bodies and credentials never become hints.
+// Keep backend response text out of diagnostic hints.
 func backendCheckHint(err error) string {
 	if errors.Is(err, errMissingVMUUID) {
 		return "selected Kubernetes VM has no SMBIOS UUID"
