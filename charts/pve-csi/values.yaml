@@ -1,29 +1,28 @@
-# Example configuration. Replace the image version and PVE settings before deployment.
-# Keep this identity unchanged while its PVs exist. One installation per driver name.
+# Replace the example PVE settings before deployment.
+# Install once per driver name; keep it unchanged while PVs exist.
 driverName: pve-csi.local
 
 image:
   repository: ghcr.io/weichen-lin/pve-csi
-  # Example only. Replace with a Git tag whose image has been published by CI.
-  tag: v0.1.0
+  # Must match Chart.yaml appVersion.
+  tag: v0.2.1
   pullPolicy: IfNotPresent
-# Public images need no login. For private images: [{name: registry-login}].
+# For private images: [{name: registry-login}].
 imagePullSecrets: []
 
 pve:
-  # Required. Replace with your PVE HTTPS URL; its hostname/IP must match the certificate.
+  # The hostname or IP must match the server certificate.
   endpoint: https://pve.example.com:8006
-  # Required. Replace with the PVE host name shown in the PVE UI, not a Kubernetes node name.
+  # PVE host name, not a Kubernetes node name.
   node: pve
-  # Required. Reserve an unused number for disk ownership, NOT an existing VM/LXC ID.
+  # Reserve this ID; do not assign it to a VM or LXC. Keep it stable while PVs exist.
   ownerVMID: 7777
-  # Required. Create this Secret in the release namespace with PVE_TOKEN_ID and PVE_TOKEN_SECRET.
+  # Existing Secret in the release namespace with PVE_TOKEN_ID and PVE_TOKEN_SECRET.
   existingSecret: pve-csi-pve
-  # Optional. Example: pve-csi-ca (existing ConfigMap with key ca.crt).
-  # Leave empty to use system CA certificates without mounting a custom CA.
+  # Existing ConfigMap with ca.crt; empty uses system trust.
   caConfigMap: ""
 
-# All selected nodes must be VMs on pve.node. Current CI publishes amd64 images.
+# All selected nodes must be VMs on pve.node; images support amd64 only.
 nodeSelector:
   kubernetes.io/os: linux
   kubernetes.io/arch: amd64
@@ -52,22 +51,20 @@ sidecars:
 storageClass:
   create: true
   name: pve-csi
-  # Required when create=true. Replace with your existing PVE storage ID.
+  # Existing PVE storage ID.
   storage: data-ssd
   reclaimPolicy: Delete
   volumeBindingMode: Immediate
   defaultClass: false
 
-# Optional suspended CronJob used as a template for on-demand read-only PVE checks.
-# It never runs by itself; start a Job from it with kubectl.
+# Suspended CronJob for read-only PVE checks; start Jobs manually.
 check:
   enabled: false
-  # Required when enabled. PVE VMIDs of the Kubernetes node VMs, e.g. [100, 101].
+  # Required when enabled: PVE VMIDs of the Kubernetes nodes.
   vmids: []
-  # Upper bound for the whole check, e.g. 60s or 2m.
+  # Timeout for the entire check.
   timeout: 60s
-  # Seconds after completion until a Job is eligible for TTL cleanup (1 day).
-  # Only one successful and one failed Job are kept; older Jobs/logs may disappear sooner.
+  # Completed Job TTL in seconds; history limits may delete Jobs sooner.
   ttlSecondsAfterFinished: 86400
   resources:
     requests: {cpu: 10m, memory: 32Mi}

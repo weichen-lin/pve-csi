@@ -1,4 +1,4 @@
-# Offline lint/render fixture. These are not home-lab credentials or settings.
+# Offline lint/render fixture.
 image:
   tag: ci
 pve:

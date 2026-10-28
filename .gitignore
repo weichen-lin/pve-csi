@@ -6,7 +6,7 @@
 /data/dev/*
 !/data/dev/.gitkeep
 
-# Credentials and environment files must not enter Git from other locations.
+# Credentials and local environment files.
 .env
 .env.*
 !/.env.example

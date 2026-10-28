@@ -5,7 +5,7 @@ on:
     branches: [main]
   push:
     branches: [main]
-    tags: ['**']
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -51,7 +51,7 @@ jobs:
   publish:
     name: Publish image
     needs: check
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
@@ -135,4 +135,49 @@ jobs:
             printf -- '- Commit: `%s`\n' "$REVISION"
             printf -- '- Tag: `%s`\n' "$tag"
             printf '\nImage published; no cluster deployment was performed.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-chart:
+    name: Publish Helm chart
+    needs: publish
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1
+      - name: Package Helm chart
+        id: chart
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          registry="oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
+          helm package charts/pve-csi --destination "$RUNNER_TEMP"
+          {
+            printf 'archive=%s/pve-csi-%s.tgz\n' "$RUNNER_TEMP" "$version"
+            printf 'registry=%s\n' "$registry"
+            printf 'version=%s\n' "$version"
+          } >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Publish Helm chart
+        env:
+          CHART_ARCHIVE: ${{ steps.chart.outputs.archive }}
+          CHART_REGISTRY: ${{ steps.chart.outputs.registry }}
+          CHART_VERSION: ${{ steps.chart.outputs.version }}
+        run: |
+          helm push "$CHART_ARCHIVE" "$CHART_REGISTRY"
+          {
+            printf '### Published Helm chart\n\n'
+            printf -- '- Chart: `%s/pve-csi`\n' "$CHART_REGISTRY"
+            printf -- '- Version: `%s`\n' "$CHART_VERSION"
+            printf '\nChart published after its image; no cluster deployment was performed.\n'
           } >> "$GITHUB_STEP_SUMMARY"

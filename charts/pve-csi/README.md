@@ -8,11 +8,11 @@ Before deploying, run the read-only [`pve-csi check`](../../CHECK.md) locally wi
 
 ## Configure your installation
 
-Keep your environment settings in your deployment repository. [values.yaml](values.yaml) includes concrete examples: replace the image version, PVE URL, host, reserved owner number, Secret name, and storage ID with your own settings. Other values can keep their defaults. Optional fields explain what leaving them empty means.
+Keep your environment settings in your deployment repository. [values.yaml](values.yaml) pins the image for this chart release and includes example PVE settings: replace the PVE URL, host, reserved owner number, Secret name, and storage ID with your own settings. Other values can keep their defaults. Optional fields explain what leaving them empty means.
 
 ```yaml
 image:
-  tag: v0.1.0
+  tag: v0.2.1
 pve:
   endpoint: https://pve.example.com:8006
   node: pve
@@ -26,11 +26,11 @@ storageClass:
   storage: data-ssd
 ```
 
-`v0.1.0` is an example: use an image version that CI has successfully published. Names such as `pve-csi-pve` and `pve-csi-ca` refer to resources you must create in the release namespace before the Controller starts.
+The default image tag is `v0.2.1`, matching chart version `0.2.1`. You can omit `image.tag` from your overrides to use the chart default. If you pin it, update it together with the selected chart version. Names such as `pve-csi-pve` and `pve-csi-ca` refer to resources you must create in the release namespace before the Controller starts.
 
 | Setting | Meaning |
 | --- | --- |
-| `image.tag` | Required. A Git tag whose image has been published by CI, such as `v0.1.0`. |
+| `image.tag` | Defaults to `v0.2.1`. An override must select an image version published by CI. |
 | `pve.endpoint` | HTTPS API URL reachable from the Controller. Its hostname or IP must appear in the server certificate. |
 | `pve.node` | PVE host name shown in the PVE UI, such as `pve`; not a Kubernetes node name. |
 | `pve.ownerVMID` | Reserved disk owner number. It must not be used by an actual VM or LXC container. |
@@ -88,27 +88,56 @@ The chart sets the StorageClass provisioner to `driverName`, fixes the filesyste
 
 ## Install and control versions
 
-Use a checkout of the Git tag whose image CI has published, and save your installation settings in `my-values.yaml`, including the matching `image.tag`. Create the target namespace before creating the token Secret and optional CA ConfigMap referenced by those settings:
+Starting with `v0.2.1`, tag releases publish two artifacts: the application image at `ghcr.io/weichen-lin/pve-csi:v0.2.1` and the Helm chart at `oci://ghcr.io/weichen-lin/charts/pve-csi` with version `0.2.1`. The chart is published only after the tested image has been pushed successfully. A release cannot be installed from GHCR until its publication finishes.
+
+Save your installation settings in `my-values.yaml`. Create the target namespace before creating the token Secret and optional CA ConfigMap referenced by those settings:
 
 ```sh
 kubectl create namespace pve-csi
 ```
 
-The namespace must permit privileged Node Pods and host mounts. After preparing the Secret and any ConfigMap, run Helm from the repository root:
+The namespace must permit privileged Node Pods and host mounts. If the chart package is private, authenticate Helm to GHCR first using a GitHub username and token with permission to read the package:
+
+```sh
+helm registry login ghcr.io --username YOUR_GITHUB_USERNAME
+```
+
+This login allows your local Helm client to download charts. Private application images separately require an `imagePullSecrets` Secret in the release namespace. Chart and image visibility are configured separately in GitHub Packages; a public source repository does not make either package public automatically.
+
+After preparing the Secret and any ConfigMap, install the published chart:
+
+```sh
+helm install pve-csi oci://ghcr.io/weichen-lin/charts/pve-csi \
+  --version 0.2.1 --namespace pve-csi -f my-values.yaml
+```
+
+For an existing release, use `helm upgrade` with the intended chart version and your values file:
+
+```sh
+helm upgrade pve-csi oci://ghcr.io/weichen-lin/charts/pve-csi \
+  --version 0.2.1 --namespace pve-csi -f my-values.yaml
+```
+
+Update any pinned `image.tag` in your values file when selecting a newer chart. Values overrides take precedence over the packaged defaults.
+
+You can also install directly from a local checkout of a published release tag. From the repository root:
 
 ```sh
 helm upgrade --install pve-csi charts/pve-csi --namespace pve-csi -f my-values.yaml
 ```
 
-This installs or upgrades the `pve-csi` release. The chart does not create the namespace, token Secret, or CA ConfigMap.
+Both methods manage the `pve-csi` Helm release. The chart does not create the namespace, token Secret, or CA ConfigMap.
 
 | Version | Controls |
 | --- | --- |
-| Git checkout | The chart templates and defaults used by the Helm command. |
+| OCI `--version` or local Git checkout | The chart templates and defaults used by the Helm command. |
 | `image.tag` | CSI application image run by the Pods, using the corresponding published Git tag. |
-| `Chart.yaml` → `version` | Chart package version; it does not select the Git revision or application image. |
+| `Chart.yaml` → `version` | Chart package version, such as `0.2.1`, selected by OCI `--version`. |
+| `Chart.yaml` → `appVersion` | Application version metadata, such as `v0.2.1`; the actual Pod image is selected by `image.tag`. |
 
-For a release, push a new Git tag and wait for CI to publish its image with the same tag. Deploy from that checkout, update `image.tag` in your values file, and rerun the Helm command. Keep published release tags unchanged. Pull requests and pushes to main run checks only; image builds and publication run only on tag pushes after checks pass.
+For each release, update `Chart.yaml` version, `Chart.yaml` appVersion and the default `image.tag` together. For `v0.2.1`, these must be `0.2.1`, `v0.2.1` and `v0.2.1`. Push the matching Git tag only after committing those changes. CI rejects mismatched versions before publishing the image, then packages the checked-in chart and pushes it with `helm push`. Keep published release tags unchanged.
+
+Pull requests and pushes to main run checks and an offline package/render comparison. Only `v*` tag pushes publish images and charts. Publishing does not deploy anything to a cluster. See [Helm OCI registries](https://helm.sh/docs/topics/registries/) for chart distribution commands.
 
 ## On-demand PVE check
 
@@ -179,7 +208,7 @@ Use explicit versions, check upstream release notes and compatibility requiremen
 ## Validate and maintain
 
 ```sh
-# Run the same offline lint/render and CronJob name checks as CI.
+# Run the same offline version, lint/render, package and CronJob name checks as CI.
 bash .github/scripts/check-helm.sh
 # Render your settings locally without contacting the cluster.
 helm template pve-csi charts/pve-csi --namespace pve-csi --kube-version 1.34.0 -f my-values.yaml

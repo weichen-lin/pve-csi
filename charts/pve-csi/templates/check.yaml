@@ -1,11 +1,10 @@
 {{- if .Values.check.enabled }}
-{{- /* Values files decode numbers as float64; print integers explicitly to avoid 1e+06. */}}
+{{- /* Cast numeric values to integers to avoid scientific notation. */}}
 {{- $vmids := list }}
 {{- range .Values.check.vmids }}
 {{- $vmids = append $vmids (int64 . | toString) }}
 {{- end }}
-# Template for on-demand read-only checks. Suspended: it never runs on a schedule.
-# Start one with kubectl create job --from=cronjob/...
+# Start checks with kubectl create job --from=cronjob/...
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -27,7 +26,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name | quote }}
         app.kubernetes.io/component: check
     spec:
-      # One attempt per request; retries would only scatter the same report.
+      # Keep one report per invocation.
       backoffLimit: 0
       ttlSecondsAfterFinished: {{ int64 .Values.check.ttlSecondsAfterFinished }}
       template:
@@ -37,7 +36,7 @@ spec:
             app.kubernetes.io/component: check
         spec:
           restartPolicy: Never
-          # The check talks only to PVE, never to the Kubernetes API.
+          # No Kubernetes API access is needed.
           automountServiceAccountToken: false
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:

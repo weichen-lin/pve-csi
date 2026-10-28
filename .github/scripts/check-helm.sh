@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+chart_metadata=$(helm show chart charts/pve-csi)
+chart_version=$(printf '%s\n' "$chart_metadata" | awk '/^version:/ { gsub(/["\047]/, "", $2); print $2 }')
+app_version=$(printf '%s\n' "$chart_metadata" | awk '/^appVersion:/ { gsub(/["\047]/, "", $2); print $2 }')
+image_tag=$(helm show values charts/pve-csi | awk '/^  tag:/ { gsub(/["\047]/, "", $2); print $2 }')
+if [[ -z "$chart_version" || "$app_version" != "v${chart_version}" ]]; then
+  printf 'Chart.yaml appVersion must equal v followed by the chart version.\n' >&2
+  exit 1
+fi
+if [[ "$image_tag" != "$app_version" ]]; then
+  printf 'Default image.tag must match Chart.yaml appVersion.\n' >&2
+  exit 1
+fi
+if [[ "${GITHUB_REF_TYPE:-}" == tag && "${GITHUB_REF_NAME:-}" != "$app_version" ]]; then
+  printf 'Release Git tag must match Chart.yaml appVersion and default image.tag.\n' >&2
+  exit 1
+fi
+
 helm lint charts/pve-csi --strict --kube-version 1.34.0 -f charts/pve-csi/ci/values.yaml
 helm template pve-csi charts/pve-csi --kube-version 1.34.0 -f charts/pve-csi/ci/values.yaml > /dev/null
 helm template pve-csi charts/pve-csi --kube-version 1.34.0 -f charts/pve-csi/ci/values.yaml \
@@ -14,8 +31,7 @@ render_check_name() {
     --show-only templates/check.yaml | awk '/^  name:/ { print $2 }'
 }
 
-# Exercise the 46/47-character boundary and Helm's 53-character release limit.
-# Long releases sharing a prefix must still produce different CronJob names.
+# Cover name-length boundaries and collisions after truncation.
 release_prefix=$(printf '%46s' '' | tr ' ' a)
 # A dot at the truncation boundary must not leave a label starting with '-'.
 dotted_release="$(printf '%36s' '' | tr ' ' a).bbbbbbbbbb"
@@ -42,4 +58,11 @@ for release in "${releases[@]}"; do
   fi
   check_names+=("$check_name")
 done
-printf 'Helm render and CronJob name checks passed.\n'
+
+package_dir=$(mktemp -d)
+trap 'rm -rf "$package_dir"' EXIT
+helm package charts/pve-csi --destination "$package_dir"
+helm template pve-csi charts/pve-csi --kube-version 1.34.0 > "$package_dir/source.yaml"
+helm template pve-csi "$package_dir/pve-csi-${chart_version}.tgz" --kube-version 1.34.0 > "$package_dir/packaged.yaml"
+cmp "$package_dir/source.yaml" "$package_dir/packaged.yaml"
+printf 'Helm version, render, package and CronJob name checks passed.\n'
